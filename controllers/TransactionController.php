@@ -23,6 +23,6 @@ class TransactionController {
     }
 
     public function getAll() {
-        return $this->transactionModel->getAll();
+        return $this->transactionModel->all();
     }
 }

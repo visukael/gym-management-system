@@ -1,21 +1,37 @@
 <?php
+
 class Attendance {
     private $conn;
-    public function __construct($db) {
-        $this->conn = $db;
+
+    public function __construct($conn) {
+        $this->conn = $conn;
     }
 
-    public function log($member_id) {
-        $date = date('Y-m-d');
-        $time = date('H:i:s');
-        $stmt = $this->conn->prepare("INSERT INTO attendance (member_id, date, time) VALUES (?, ?, ?)");
-        $stmt->bind_param("iss", $member_id, $date, $time);
+    public function create($member_id, $user_id) {
+        $stmt = $this->conn->prepare("INSERT INTO attendance (member_id, checkin_time, created_by) VALUES (?, NOW(), ?)");
+        $stmt->bind_param("ii", $member_id, $user_id);
         return $stmt->execute();
     }
 
-    public function getToday() {
-        $date = date('Y-m-d');
-        $stmt = $this->conn->prepare("SELECT a.*, m.full_name FROM attendance a LEFT JOIN members m ON a.member_id = m.id WHERE a.date = ?");
+    public function getAll() {
+        return $this->conn->query("
+            SELECT a.*, m.full_name, u.name AS admin_name 
+            FROM attendance a
+            JOIN members m ON a.member_id = m.id
+            LEFT JOIN users u ON a.created_by = u.id
+            ORDER BY a.checkin_time DESC
+        ");
+    }
+
+    public function getByDate($date) {
+        $stmt = $this->conn->prepare("
+            SELECT a.*, m.full_name, u.name AS admin_name 
+            FROM attendance a
+            JOIN members m ON a.member_id = m.id
+            LEFT JOIN users u ON a.created_by = u.id
+            WHERE DATE(a.checkin_time) = ?
+            ORDER BY a.checkin_time DESC
+        ");
         $stmt->bind_param("s", $date);
         $stmt->execute();
         return $stmt->get_result();

@@ -37,7 +37,7 @@ class MemberController {
             'amount' => $amount,
             'discount' => $discount,
             'final_amount' => $final,
-            'member_id' => null, // optional
+            'member_id' => null,
             'product_id' => null,
             'user_id' => $userId
         ];

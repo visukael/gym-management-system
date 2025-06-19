@@ -5,11 +5,18 @@ require_once '../../models/Transaction.php';
 
 $trxModel = new Transaction($conn);
 
-// Handle tambah manual transaksi
+// Hapus transaksi (opsional)
+if (isset($_GET['delete'])) {
+    $trxModel->delete($_GET['delete']);
+    header("Location: transactions.php");
+    exit;
+}
+
+// Tambah transaksi manual
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_manual'])) {
     $label = $_POST['label'];
     $desc = $_POST['description'];
-    $amount = $_POST['amount'];
+    $amount = (float) $_POST['amount'];
     $user_id = $_SESSION['user_id'];
 
     $trxModel->create([
@@ -28,15 +35,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_manual'])) {
     exit;
 }
 
-$transactions = $trxModel->getAll();
+// Ambil data transaksi
+$transactions = $trxModel->all();
 ?>
 
-<h2>Buku Besar Transaksi</h2>
+<h2>Data Transaksi</h2>
 
-<!-- Form Transaksi Manual -->
-<form method="post" style="margin-bottom: 20px;">
+<form method="post" style="margin-bottom: 30px;">
     <h3>Tambah Transaksi Manual</h3>
-    <label>Tipe Transaksi:</label><br>
+
+    <label>Tipe:</label><br>
     <select name="label" required>
         <option value="income">Pemasukan</option>
         <option value="outcome">Pengeluaran</option>
@@ -46,30 +54,40 @@ $transactions = $trxModel->getAll();
     <input type="text" name="description" required><br>
 
     <label>Jumlah (Rp):</label><br>
-    <input type="number" name="amount" required><br><br>
+    <input type="number" name="amount" step="1000" required><br><br>
 
     <button type="submit" name="add_manual">Simpan Transaksi</button>
 </form>
 
-<!-- Tabel Transaksi -->
-<h3>Riwayat Transaksi</h3>
+<hr>
+
 <table border="1" cellpadding="8">
     <tr>
+        <th>#</th>
         <th>Tanggal</th>
-        <th>Jenis</th>
-        <th>Keterangan</th>
+        <th>Tipe</th>
+        <th>Deskripsi</th>
         <th>Label</th>
-        <th>Nominal</th>
+        <th>Harga Asli</th>
+        <th>Diskon</th>
+        <th>Total Bayar</th>
         <th>Petugas</th>
+        <th>Aksi</th>
     </tr>
-    <?php while ($row = $transactions->fetch_assoc()): ?>
+    <?php $no = 1; while ($row = $transactions->fetch_assoc()): ?>
     <tr>
-        <td><?= $row['created_at'] ?></td>
-        <td><?= $row['transaction_type'] ?></td>
+        <td><?= $no++ ?></td>
+        <td><?= date('d/m/Y H:i', strtotime($row['created_at'])) ?></td>
+        <td><?= htmlspecialchars($row['transaction_type']) ?></td>
         <td><?= htmlspecialchars($row['description']) ?></td>
-        <td><?= strtoupper($row['label']) ?></td>
-        <td>Rp<?= number_format($row['final_amount']) ?></td>
-        <td><?= $row['user_id'] ?></td> <!-- Opsional: tampilkan nama jika JOIN -->
+        <td style="color:<?= $row['label'] === 'income' ? 'green' : 'red' ?>">
+            <?= strtoupper($row['label']) ?>
+        </td>
+        <td>Rp<?= number_format($row['amount'], 0, ',', '.') ?></td>
+        <td>Rp<?= number_format($row['discount'], 0, ',', '.') ?></td>
+        <td><strong>Rp<?= number_format($row['final_amount'], 0, ',', '.') ?></strong></td>
+        <td><?= htmlspecialchars($row['user_name'] ?? '-') ?></td>
+        <td><a href="?delete=<?= $row['id'] ?>" onclick="return confirm('Hapus transaksi ini?')">Hapus</a></td>
     </tr>
     <?php endwhile; ?>
 </table>

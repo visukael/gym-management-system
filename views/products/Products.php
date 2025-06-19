@@ -39,6 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_product'])) {
                 'product_id' => $newProductId,
                 'user_id' => $_SESSION['user_id']
             ]);
+
+            // Tambah ke histori stok
+            $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
+            $stmtHist->bind_param("iid", $newProductId, $stock, $initial_buy_price);
+            $stmtHist->execute();
         }
     }
 
@@ -54,7 +59,7 @@ if (isset($_GET['delete'])) {
     exit;
 }
 
-// --- Tambah Stok (transaksi hanya jika harga beli > 0) ---
+// --- Tambah Stok ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_stock'])) {
     $id = $_POST['product_id'];
     $qty = (int) $_POST['qty'];
@@ -62,6 +67,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_stock'])) {
 
     $product = $productModel->getById($id);
     $productModel->addStock($id, $qty);
+
+    // Simpan ke histori stok
+    $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
+    $stmtHist->bind_param("iid", $id, $qty, $buy_total);
+    $stmtHist->execute();
 
     if ($buy_total > 0) {
         $trxModel->create([
@@ -103,7 +113,7 @@ if (isset($_GET['missing'])) {
     exit;
 }
 
-// --- Penjualan Produk (gabungan) ---
+// --- Penjualan Produk ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_sale'])) {
     $selected = $_POST['selected_products'] ?? [];
     $quantities = $_POST['qty'] ?? [];
@@ -235,3 +245,30 @@ $products = $productModel->getAll();
     </table><br>
     <button type="submit" name="submit_sale">Proses Penjualan</button>
 </form>
+
+<hr>
+<h3>Riwayat Penambahan Stok</h3>
+<table border="1" cellpadding="6">
+    <tr>
+        <th>Produk</th>
+        <th>Jumlah</th>
+        <th>Harga Beli</th>
+        <th>Tanggal</th>
+    </tr>
+    <?php
+    $stockLog = $conn->query("
+        SELECT s.*, p.name AS product_name
+        FROM product_stock_entries s
+        JOIN products p ON s.product_id = p.id
+        ORDER BY s.created_at DESC
+    ");
+    while ($row = $stockLog->fetch_assoc()):
+    ?>
+    <tr>
+        <td><?= htmlspecialchars($row['product_name']) ?></td>
+        <td><?= $row['quantity'] ?></td>
+        <td>Rp<?= number_format($row['buy_price'], 0, ',', '.') ?></td>
+        <td><?= $row['created_at'] ?></td>
+    </tr>
+    <?php endwhile; ?>
+</table>
