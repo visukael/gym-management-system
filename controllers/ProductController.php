@@ -18,7 +18,7 @@ class ProductController {
         $this->productModel->updateStock($productId, $qty);
 
         $transactionData = [
-            'transaction_type' => 'product',
+            'transaction_type' => 'product_sale',
             'label' => 'income',
             'description' => "Penjualan Produk: {$product['name']} x{$qty}",
             'amount' => $total,

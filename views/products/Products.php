@@ -26,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_product'])) {
         $stmt->execute();
         $newProductId = $conn->insert_id;
 
-        // Catat stok awal hanya jika ada harga beli
+        // Catat stok awal
         if ($stock > 0 && $initial_buy_price > 0) {
             $trxModel->create([
                 'transaction_type' => 'stock_add',
@@ -40,7 +40,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_product'])) {
                 'user_id' => $_SESSION['user_id']
             ]);
 
-            // Tambah ke histori stok
             $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
             $stmtHist->bind_param("iid", $newProductId, $stock, $initial_buy_price);
             $stmtHist->execute();
@@ -68,7 +67,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_stock'])) {
     $product = $productModel->getById($id);
     $productModel->addStock($id, $qty);
 
-    // Simpan ke histori stok
     $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
     $stmtHist->bind_param("iid", $id, $qty, $buy_total);
     $stmtHist->execute();
@@ -122,10 +120,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_sale'])) {
     $product_list = [];
 
     foreach ($selected as $product_id) {
+        $qty = isset($quantities[$product_id]) ? (int) $quantities[$product_id] : 0;
         $product = $productModel->getById($product_id);
-        $qty = (int) ($quantities[$product_id] ?? 0);
 
-        if ($qty > 0 && $product['stock'] >= $qty) {
+        if ($qty <= 0) continue;
+
+        if ($product['stock'] >= $qty) {
             $subTotal = $product['price'] * $qty;
             $total += $subTotal;
             $productModel->removeStock($product_id, $qty);
@@ -180,7 +180,7 @@ $products = $productModel->getAll();
 
 <hr>
 
-<!-- Form Tambah Stok -->
+<!-- Tambah Stok -->
 <?php if (isset($_GET['add_stock'])): 
     $product = $productModel->getById($_GET['add_stock']);
 ?>
@@ -238,13 +238,24 @@ $products = $productModel->getAll();
             <td><?= htmlspecialchars($row['name']) ?></td>
             <td>Rp<?= number_format($row['price']) ?></td>
             <td>
-                <input type="number" name="qty[<?= $row['id'] ?>]" min="1" max="<?= $row['stock'] ?>" value="1" style="width:60px;">
+                <input type="number" name="qty[<?= $row['id'] ?>]" min="1" max="<?= $row['stock'] ?>" value="1" style="width:60px;" disabled>
             </td>
         </tr>
         <?php endforeach; ?>
     </table><br>
     <button type="submit" name="submit_sale">Proses Penjualan</button>
 </form>
+
+<script>
+// Aktifkan input qty hanya jika checkbox dipilih
+document.querySelectorAll("input[type=checkbox][name='selected_products[]']").forEach(cb => {
+    cb.addEventListener('change', function() {
+        const rowId = this.value;
+        const qtyInput = document.querySelector(`input[name='qty[${rowId}]']`);
+        if (qtyInput) qtyInput.disabled = !this.checked;
+    });
+});
+</script>
 
 <hr>
 <h3>Riwayat Penambahan Stok</h3>

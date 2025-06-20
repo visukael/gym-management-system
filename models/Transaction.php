@@ -23,8 +23,31 @@ class Transaction {
             (transaction_type, label, description, amount, discount, final_amount, member_id, product_id, user_id, created_at) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
-        $stmt->bind_param("sssddiiii", $type, $label, $desc, $amount, $discount, $final, $member_id, $product_id, $user_id);
-        return $stmt->execute();
+
+        // Bind NULL-safe values
+        $member_id = isset($member_id) ? (int) $member_id : null;
+        $product_id = isset($product_id) ? (int) $product_id : null;
+
+        // Gunakan bind_param untuk nullable int
+        $stmt->bind_param(
+            "sssddiiii",
+            $type,
+            $label,
+            $desc,
+            $amount,
+            $discount,
+            $final,
+            $member_id,
+            $product_id,
+            $user_id
+        );
+
+        if (!$stmt->execute()) {
+            // Jika gagal, tampilkan error
+            die("Gagal menyimpan transaksi: " . $stmt->error);
+        }
+
+        return true;
     }
 
     public function all() {
