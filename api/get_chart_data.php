@@ -1,22 +1,20 @@
 <?php
-// File: api/get_chart_data.php
 require_once '../config/database.php';
 
 header('Content-Type: application/json');
 
-$conn = $conn; // Menggunakan koneksi dari config/database.php
+$conn = $conn;
 
-$period = $_GET['period'] ?? 'month'; // Default to 'month'
+$period = $_GET['period'] ?? 'month'; 
 
 $data = [];
 $labels = [];
 
 switch ($period) {
     case 'day':
-        // Last 7 days
         for ($i = 6; $i >= 0; $i--) {
             $date = date('Y-m-d', strtotime("-$i days"));
-            $dayLabel = date('D, d M', strtotime("-$i days")); // e.g., Mon, 01 Jan
+            $dayLabel = date('D, d M', strtotime("-$i days"));
 
             $query = $conn->prepare("SELECT SUM(final_amount) AS total_income FROM transactions WHERE label = 'income' AND DATE(created_at) = ?");
             $query->bind_param("s", $date);
@@ -30,17 +28,15 @@ switch ($period) {
         break;
 
     case 'week':
-        // Last 6 weeks (approx. 42 days)
-        // Find the start of the current week (Monday)
         $today = new DateTime();
         $startOfWeek = clone $today;
         $startOfWeek->modify('Monday this week');
 
-        for ($i = 5; $i >= 0; $i--) { // Last 6 weeks including current partial week
+        for ($i = 5; $i >= 0; $i--) {
             $currentWeekStart = clone $startOfWeek;
             $currentWeekStart->modify("-$i weeks");
             $currentWeekEnd = clone $currentWeekStart;
-            $currentWeekEnd->modify('+6 days'); // End of the week (Sunday)
+            $currentWeekEnd->modify('+6 days');
 
             $weekLabel = $currentWeekStart->format('d M') . ' - ' . $currentWeekEnd->format('d M');
             
@@ -60,7 +56,6 @@ switch ($period) {
 
     case 'month':
     default:
-        // Last 6 months (default)
         for ($i = 5; $i >= 0; $i--) {
             $month = date('Y-m', strtotime("-$i months"));
             $monthLabel = date('M Y', strtotime("-$i months"));

@@ -1,109 +1,47 @@
 <?php
 session_start();
 require_once '../../config/database.php';
+require_once '../../controllers/PromotionController.php';
+require_once '../../models/MembershipPackage.php';
 
-// Redirect user yang tidak berwenang
 if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin'])) {
     header('Location: ../../login.php');
     exit;
 }
 
-// Ambil pesan sukses/error dari session untuk ditampilkan sebagai toast
+$promotionController = new PromotionController($conn);
+
 $success_message = $_SESSION['success_message'] ?? '';
 $error_message = $_SESSION['error_message'] ?? '';
 unset($_SESSION['success_message']);
 unset($_SESSION['error_message']);
 
-// Proses Simpan / Edit
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $id = $_POST['id'] ?? '';
-    $name = htmlspecialchars(trim($_POST['name']));
-    $type = htmlspecialchars(trim($_POST['discount_type'])); // flat / percent
-    $value = (float)($_POST['discount_value'] ?? 0);
-    $start = htmlspecialchars(trim($_POST['start_date']));
-    $end = htmlspecialchars(trim($_POST['end_date']));
-
-    // Validasi input
-    if (empty($name) || empty($start) || empty($end) || $value <= 0) {
-        $_SESSION['error_message'] = "Please fill all required fields correctly.";
-        header("Location: promotions.php");
-        exit;
-    }
-
-    // Validasi discount_type untuk pastikan flat / percent
-    if (!in_array($type, ['flat', 'percent'])) {
-        $_SESSION['error_message'] = "Invalid discount type. Must be 'flat' or 'percent'.";
-        header("Location: promotions.php");
-        exit;
-    }
-
-    // Pastikan tanggal mulai tidak lebih besar dari tanggal berakhir
-    if (strtotime($start) > strtotime($end)) {
-        $_SESSION['error_message'] = "Start date cannot be after end date.";
-        header("Location: promotions.php");
-        exit;
-    }
-
-
-    if ($id) {
-        $stmt = $conn->prepare("UPDATE promotions SET name=?, discount_type=?, discount_value=?, start_date=?, end_date=? WHERE id=?");
-        $stmt->bind_param("ssdsi", $name, $type, $value, $start, $end, $id);
-        $message = "Promotion updated successfully!";
-        $error_msg = "Error updating promotion.";
+    $response = $promotionController->handlePromotionSubmit($_POST);
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
     } else {
-        $stmt = $conn->prepare("INSERT INTO promotions (name, discount_type, discount_value, start_date, end_date) VALUES (?, ?, ?, ?, ?)");
-        $stmt->bind_param("ssds", $name, $type, $value, $start, $end);
-        $message = "Promotion added successfully!";
-        $error_msg = "Error adding promotion.";
-    }
-
-    if ($stmt->execute()) {
-        $_SESSION['success_message'] = $message;
-    } else {
-        $_SESSION['error_message'] = $error_msg . " " . $conn->error; // Tambahkan error database untuk debugging
+        $_SESSION['error_message'] = $response['message'];
     }
     header("Location: promotions.php");
     exit;
 }
 
-// Ambil data untuk edit
-$editData = null;
-if (isset($_GET['edit'])) {
-    $id = (int)$_GET['edit'];
-    $stmt = $conn->prepare("SELECT * FROM promotions WHERE id=?");
-    $stmt->bind_param("i", $id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    if ($result->num_rows > 0) {
-        $editData = $result->fetch_assoc();
-    } else {
-        $_SESSION['error_message'] = "Promotion not found.";
-        header("Location: promotions.php");
-        exit;
-    }
-}
-
-// Hapus promo
 if (isset($_GET['delete'])) {
-    $id = (int)$_GET['delete'];
-    $stmt = $conn->prepare("DELETE FROM promotions WHERE id=?");
-    $stmt->bind_param("i", $id);
-    if ($stmt->execute()) {
-        $_SESSION['success_message'] = "Promotion deleted successfully!";
+    $response = $promotionController->handleDeletePromotion((int)$_GET['delete']);
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
     } else {
-        $_SESSION['error_message'] = "Error deleting promotion. It might be linked to other data.";
+        $_SESSION['error_message'] = $response['message'];
     }
     header("Location: promotions.php");
     exit;
 }
 
-// Ambil semua promo
-// Query sekarang tidak JOIN ke membership_packages karena promo berlaku universal
-$promos_query = $conn->query("
-    SELECT p.*
-    FROM promotions p
-    ORDER BY p.id DESC
-");
+$viewData = $promotionController->getPromotionViewData($_GET);
+$allPromotions = $viewData['allPromotions'];
+$allPackages = $viewData['allPackages'];
+$editData = $viewData['editData'];
 
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
 $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
@@ -118,143 +56,8 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
     <title>Manage Promotions - Gym Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="../../assets/css/style.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
-    <style>
-        body {
-            font-family: 'Inter', system-ui, sans-serif;
-        }
-
-        .sidebar-item {
-            transition: background-color 0.2s, color 0.2s;
-        }
-
-        .sidebar-item:hover {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item:hover .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .sidebar-item.active {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item.active .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .table-row-hover:hover {
-            background-color: #f9fafb;
-        }
-
-        .form-input-field:focus,
-        .form-select-field:focus,
-        .form-textarea-field:focus {
-            border-color: #ef4444;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
-            outline: none;
-        }
-
-        .form-input-field:hover,
-        .form-select-field:hover,
-        .form-textarea-field:hover {
-            border-color: #ef4444;
-        }
-
-        .btn-primary {
-            transition: background-color 0.2s, box-shadow 0.2s;
-        }
-
-        .btn-primary:hover {
-            background-color: #dc2626;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }
-
-        .btn-secondary {
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
-
-        .btn-secondary:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-            border-color: #ef4444;
-        }
-
-        .action-link {
-            transition: color 0.2s;
-        }
-        .action-link:hover {
-            color: #ef4444;
-        }
-        .action-link.text-blue-600:hover {
-            color: #2563eb;
-        }
-        .action-link.text-red-600:hover {
-            color: #dc2626;
-        }
-        .action-link.text-yellow-600:hover {
-            color: #ca8a04;
-        }
-
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1050;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: none;
-        }
-
-        .toast {
-            background-color: #333;
-            color: #fff;
-            padding: 12px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-            opacity: 0;
-            transform: translateY(-20px);
-            animation: slideIn 0.5s forwards, fadeOut 0.5s 2.5s forwards;
-            pointer-events: all;
-            min-width: 250px;
-            text-align: center;
-        }
-
-        .toast.success {
-            background-color: #10b981;
-        }
-
-        .toast.error {
-            background-color: #ef4444;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes fadeOut {
-            from {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            to {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-        }
-    </style>
 </head>
 
 <body class="bg-gray-50 text-gray-900">
@@ -370,6 +173,19 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
                         </div>
 
                         <div>
+                            <label for="package_id" class="block text-sm font-medium text-gray-700 mb-1">Apply to Package (Optional)</label>
+                            <select name="package_id" id="package_id"
+                                class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                                <option value="">All Packages</option>
+                                <?php foreach ($allPackages as $pkg): ?>
+                                    <option value="<?= $pkg['id'] ?>" <?= (isset($editData['package_id']) && $editData['package_id'] == $pkg['id']) ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($pkg['name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div>
                             <label for="start_date" class="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                             <input type="date" name="start_date" id="start_date" value="<?= htmlspecialchars($editData['start_date'] ?? date('Y-m-d')) ?>" required
                                 class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
@@ -403,13 +219,14 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Discount</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Applies To</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
                                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
-                                <?php if ($promos_query->num_rows > 0): ?>
-                                    <?php while ($row = $promos_query->fetch_assoc()): ?>
+                                <?php if (count($allPromotions) > 0): ?>
+                                    <?php foreach ($allPromotions as $row): ?>
                                         <tr class="table-row-hover" id="promo-<?= $row['id'] ?>">
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900"><?= htmlspecialchars($row['name']) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= ucfirst($row['discount_type']) ?></td>
@@ -417,6 +234,9 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
                                                 <?= $row['discount_type'] === 'percent'
                                                     ? htmlspecialchars($row['discount_value']) . '%'
                                                     : 'Rp' . number_format($row['discount_value'], 0, ',', '.') ?>
+                                            </td>
+                                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                                <?= htmlspecialchars($row['package_name'] ?? 'All Packages') ?>
                                             </td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
                                                 <?= date('d M Y', strtotime($row['start_date'])) ?> - <?= date('d M Y', strtotime($row['end_date'])) ?>
@@ -430,10 +250,10 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
                                                 </button>
                                             </td>
                                         </tr>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
                                 <?php else: ?>
                                     <tr>
-                                        <td colspan="5" class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 text-center">No promotions found.</td>
+                                        <td colspan="6" class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 text-center">No promotions found.</td>
                                     </tr>
                                 <?php endif; ?>
                             </tbody>
@@ -459,14 +279,12 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
             sidebar.classList.toggle('z-40');
         }
 
-        // --- Confirmation Functions ---
         function confirmDelete(id) {
             if (confirm(`Are you sure you want to delete this promotion (ID: ${id})? This action cannot be undone.`)) {
                 window.location.href = `promotions.php?delete=${id}`;
             }
         }
 
-        // --- Toast Notifications ---
         const toastContainer = document.getElementById('toastContainer');
         function showToast(message, type) {
             const toast = document.createElement('div');
@@ -479,7 +297,6 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
             }, 3500);
         }
 
-        // Display PHP session messages on page load
         <?php if ($success_message): ?>
             showToast('<?= $success_message ?>', 'success');
         <?php endif; ?>

@@ -4,7 +4,6 @@ require_once '../../config/database.php';
 require_once '../../models/Product.php';
 require_once '../../models/Transaction.php';
 
-// Redirect unauthorized users
 if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin'])) {
     header('Location: ../../login.php');
     exit;
@@ -13,37 +12,8 @@ if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner'
 $productModel = new Product($conn);
 $trxModel = new Transaction($conn);
 
-// Automatically deactivate expired memberships (This is usually for members, not products.
-// Keeping it here if it's a global script for all admin pages, but ensure its relevance.)
-$today = date('Y-m-d');
-// Note: This specific query below is from members.php, ensure it's still intended for products.
-// If not, it should be removed or adjusted for product-related status updates if applicable.
-// $conn->query("UPDATE members SET status = 'inactive' WHERE expired_date < '$today' AND status = 'active'"); 
-
-
-// Fetch all membership packages (also from members.php, likely not needed for products.php)
-$packages_result = $conn->query("SELECT * FROM membership_packages ORDER BY name ASC");
-$packages = [];
-while ($row = $packages_result->fetch_assoc()) {
-    $packages[] = $row;
-}
-
-// Fetch active promotions (also from members.php, likely not needed for products.php)
-$promos_result = $conn->query("
-    SELECT promotions.*, mp.name AS package_name
-    FROM promotions
-    LEFT JOIN membership_packages mp ON promotions.package_id = mp.id
-    WHERE promotions.start_date <= CURDATE() AND promotions.end_date >= CURDATE()
-    ORDER BY promotions.name ASC
-");
-$promos = [];
-while ($row = $promos_result->fetch_assoc()) {
-    $promos[] = $row;
-}
-
-// Handle form submissions (Add/Edit Product, Add Stock, Product Sale)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action_type = $_POST['action_type'] ?? ''; // Hidden field to determine action
+    $action_type = $_POST['action_type'] ?? '';
     $user_id = $_SESSION['user_id'];
 
     if ($action_type === 'submit_product') {
@@ -52,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = htmlspecialchars(trim($_POST['description']));
         $price = (float)$_POST['price'];
         $stock = (int)$_POST['stock'];
-        $initial_buy_price = (float)($_POST['initial_buy_price'] ?? 0); // Only for new product initial stock
+        $initial_buy_price = (float)($_POST['initial_buy_price'] ?? 0);
 
         if (empty($name) || $price < 0 || $stock < 0) {
             $_SESSION['error_message'] = "Product name, price, and stock are required and cannot be negative.";
@@ -61,7 +31,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($id) {
-            // Update Existing Product
             $stmt = $conn->prepare("UPDATE products SET name=?, description=?, price=?, stock=? WHERE id=?");
             $stmt->bind_param("ssdii", $name, $description, $price, $stock, $id);
             if ($stmt->execute()) {
@@ -70,13 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['error_message'] = "Error updating product: " . $conn->error;
             }
         } else {
-            // Add New Product
             $stmt = $conn->prepare("INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)");
             $stmt->bind_param("ssdi", $name, $description, $price, $stock);
             if ($stmt->execute()) {
                 $newProductId = $conn->insert_id;
 
-                // Record initial stock purchase as an outcome transaction
                 if ($stock > 0 && $initial_buy_price > 0) {
                     $trxModel->create([
                         'transaction_type' => 'stock_add',
@@ -87,10 +54,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'final_amount' => $initial_buy_price,
                         'member_id' => null,
                         'product_id' => $newProductId,
-                        'user_id' => $user_id
+                        'user_id' => $user_id,
+                        'payment_method' => 'cash'
                     ]);
 
-                    // Record initial stock entry in product_stock_entries
                     $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
                     $stmtHist->bind_param("iid", $newProductId, $stock, $initial_buy_price);
                     $stmtHist->execute();
@@ -101,7 +68,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     } elseif ($action_type === 'submit_stock') {
-        // Logic for Adding Stock
         $product_id = (int)($_POST['product_id'] ?? 0);
         $qty = (int)($_POST['qty'] ?? 0);
         $buy_total = (float)($_POST['buy_price'] ?? 0);
@@ -120,12 +86,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($productModel->addStock($product_id, $qty)) {
-            // Record stock entry in product_stock_entries
             $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
             $stmtHist->bind_param("iid", $product_id, $qty, $buy_total);
             $stmtHist->execute();
 
-            // Record as an outcome transaction if there's a buy price
             if ($buy_total > 0) {
                 $trxModel->create([
                     'transaction_type' => 'stock_add',
@@ -136,7 +100,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'final_amount' => $buy_total,
                     'member_id' => null,
                     'product_id' => $product_id,
-                    'user_id' => $user_id
+                    'user_id' => $user_id,
+                    'payment_method' => 'cash'
                 ]);
             }
             $_SESSION['success_message'] = "Stock for " . htmlspecialchars($product['name']) . " added successfully!";
@@ -144,10 +109,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['error_message'] = "Failed to add stock.";
         }
     } elseif ($action_type === 'submit_sale') {
-        // Logic for Product Sale
         $selected_products_ids = $_POST['selected_products'] ?? [];
         $quantities_from_form = $_POST['qty'] ?? [];
-
+        $payment_method_sale = htmlspecialchars(trim($_POST['payment_method_sale'] ?? 'cash'));
         $total_sale_amount = 0;
         $products_sold_details = [];
 
@@ -167,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $_SESSION['error_message'] = "Not enough stock for " . htmlspecialchars($product['name']) . " or product not found.";
                 header("Location: products.php");
-                exit; // Stop processing if any item has insufficient stock
+                exit;
             }
         }
 
@@ -181,8 +145,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'discount' => 0,
                 'final_amount' => $total_sale_amount,
                 'member_id' => null,
-                'product_id' => null, // This sale might involve multiple products, so no single product_id
-                'user_id' => $user_id
+                'product_id' => null,
+                'user_id' => $user_id,
+                'payment_method' => $payment_method_sale
             ]);
             $_SESSION['success_message'] = "Product sale successfully processed!";
         } else {
@@ -193,12 +158,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// Handle GET actions (Delete, Missing)
 if (isset($_GET['delete'])) {
     $id = (int)$_GET['delete'];
-    $stmt = $conn->prepare("DELETE FROM products WHERE id = ?");
-    $stmt->bind_param("i", $id);
-    if ($stmt->execute()) {
+    if ($productModel->deleteProduct($id)) {
         $_SESSION['success_message'] = "Product deleted successfully!";
     } else {
         $_SESSION['error_message'] = "Error deleting product. It might be referenced in transactions or stock entries.";
@@ -216,12 +178,13 @@ if (isset($_GET['missing'])) {
                 'transaction_type' => 'missing_item',
                 'label' => 'outcome',
                 'description' => "Missing product: {$product['name']} (1 unit)",
-                'amount' => $product['price'], // Using sale price for a 'loss' value
+                'amount' => $product['price'],
                 'discount' => 0,
                 'final_amount' => $product['price'],
                 'member_id' => null,
                 'product_id' => $id,
-                'user_id' => $_SESSION['user_id']
+                'user_id' => $_SESSION['user_id'],
+                'payment_method' => 'cash'
             ]);
             $_SESSION['success_message'] = htmlspecialchars($product['name']) . " marked as missing.";
         } else {
@@ -234,7 +197,6 @@ if (isset($_GET['missing'])) {
     exit;
 }
 
-// Fetch Data for Display (for modals and table)
 $editData = null;
 if (isset($_GET['edit'])) {
     $id = (int)$_GET['edit'];
@@ -261,62 +223,16 @@ if (isset($_GET['add_stock'])) {
     }
 }
 
-// Search and Filter Logic for Product List
 $searchTerm = $_GET['search'] ?? '';
-$filterStock = $_GET['stock_status'] ?? ''; // 'all', 'low', 'in_stock', 'out_of_stock'
+$filterStock = $_GET['stock_status'] ?? '';
 
-$sql = "SELECT p.*, (SELECT AVG(buy_price/quantity) FROM product_stock_entries WHERE product_id = p.id AND quantity > 0) as avg_buy_price
-        FROM products p
-        WHERE 1=1";
+$products = $productModel->getFilteredProducts($searchTerm, $filterStock);
 
-$params = [];
-$types = "";
+$stockLog = $productModel->getRecentStockHistory(10);
 
-if (!empty($searchTerm)) {
-    $sql .= " AND (p.name LIKE ? OR p.description LIKE ?)";
-    $params[] = '%' . $searchTerm . '%';
-    $params[] = '%' . $searchTerm . '%';
-    $types .= "ss";
-}
-
-if (!empty($filterStock)) {
-    if ($filterStock === 'low') {
-        $sql .= " AND p.stock <= 5 AND p.stock > 0"; // Low stock but not zero
-    } elseif ($filterStock === 'in_stock') {
-        $sql .= " AND p.stock > 0";
-    } elseif ($filterStock === 'out_of_stock') {
-        $sql .= " AND p.stock = 0";
-    }
-}
-
-$sql .= " ORDER BY p.id DESC";
-
-$products_stmt = $conn->prepare($sql);
-
-if (!empty($params)) {
-    $products_stmt->bind_param($types, ...$params);
-}
-$products_stmt->execute();
-$products = $products_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-
-// Fetch recent stock history for display
-$stockLog_result = $conn->query("
-    SELECT s.*, p.name AS product_name
-    FROM product_stock_entries s
-    JOIN products p ON s.product_id = p.id
-    ORDER BY s.created_at DESC
-    LIMIT 10
-");
-$stockLog = [];
-while ($row = $stockLog_result->fetch_assoc()) {
-    $stockLog[] = $row;
-}
-
-// User data for sidebar
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
 $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 
-// Fetch session messages for toasts
 $success_message = $_SESSION['success_message'] ?? '';
 $error_message = $_SESSION['error_message'] ?? '';
 unset($_SESSION['success_message']);
@@ -332,208 +248,8 @@ unset($_SESSION['error_message']);
     <title>Manage Products - Gym Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="../../assets/css/style.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
-    <style>
-        body {
-            font-family: 'Inter', system-ui, sans-serif;
-        }
-
-        .sidebar-item {
-            transition: background-color 0.2s, color 0.2s;
-        }
-
-        .sidebar-item:hover {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item:hover .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .sidebar-item.active {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item.active .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .table-row-hover:hover {
-            background-color: #f9fafb;
-        }
-
-        .form-input-field:focus,
-        .form-select-field:focus,
-        .form-textarea-field:focus {
-            border-color: #ef4444;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
-            outline: none;
-        }
-
-        .form-input-field:hover,
-        .form-select-field:hover,
-        .form-textarea-field:hover {
-            border-color: #ef4444;
-        }
-
-        .btn-primary {
-            transition: background-color 0.2s, box-shadow 0.2s;
-        }
-        .btn-primary:hover {
-            background-color: #dc2626;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }
-
-        .btn-secondary {
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
-        .btn-secondary:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-            border-color: #ef4444;
-        }
-
-        .action-link {
-            transition: color 0.2s;
-        }
-        .action-link:hover {
-            color: #ef4444;
-        }
-        .action-link.text-blue-600:hover {
-            color: #2563eb;
-        }
-        .action-link.text-red-600:hover {
-            color: #dc2626;
-        }
-        .action-link.text-yellow-600:hover {
-            color: #ca8a04;
-        }
-
-        .status-badge {
-            padding: 0.25rem 0.5rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            line-height: 1.25;
-            display: inline-flex;
-            align-items: center;
-        }
-        .status-low {
-            background-color: #fef3c7;
-            color: #92400e;
-        }
-        .status-out {
-            background-color: #fee2e2;
-            color: #991b1b;
-        }
-        .status-in {
-            background-color: #d1fae5;
-            color: #065f46;
-        }
-
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.4);
-            align-items: center;
-            justify-content: center;
-        }
-
-        .modal-content {
-            background-color: #fefefe;
-            margin: auto;
-            padding: 24px;
-            border-radius: 0.75rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            width: 90%;
-            max-width: 600px;
-            position: relative;
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-
-        .close-button {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #aaa;
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-
-        .close-button:hover,
-        .close-button:focus {
-            color: #ef4444;
-            text-decoration: none;
-            cursor: pointer;
-        }
-
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1050;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: none;
-        }
-
-        .toast {
-            background-color: #333;
-            color: #fff;
-            padding: 12px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-            opacity: 0;
-            transform: translateY(-20px);
-            animation: slideIn 0.5s forwards, fadeOut 0.5s 2.5s forwards;
-            pointer-events: all;
-            min-width: 250px;
-            text-align: center;
-        }
-
-        .toast.success {
-            background-color: #10b981;
-        }
-
-        .toast.error {
-            background-color: #ef4444;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes fadeOut {
-            from {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            to {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-        }
-    </style>
 </head>
 
 <body class="bg-gray-50 text-gray-900">
@@ -581,17 +297,15 @@ unset($_SESSION['error_message']);
                         </a>
                     </nav>
                     <div class="mt-auto">
-                        <div class="p-4 mt-4 bg-gray-50 rounded-lg">
-                            <div class="flex items-center">
-                                <div class="flex-shrink-0">
-                                    <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
-                                </div>
-                                <div class="ml-3">
-                                    <p class="text-sm font-medium"><?= $userName ?></p>
-                                    <p class="text-xs text-gray-500"><?= $userRole ?></p>
-                                </div>
+                        <a href="../settings/setting.php" class="flex items-center p-4 mt-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+                            <div class="flex-shrink-0">
+                                <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
                             </div>
-                        </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
+                                <p class="text-xs text-gray-500"><?= $userRole ?></p>
+                            </div>
+                        </a>
                     </div>
                 </div>
             </div>
@@ -648,7 +362,7 @@ unset($_SESSION['error_message']);
                             </button>
                             <?php if (!empty($searchTerm) || !empty($filterStock)): ?>
                                 <a href="products.php" class="btn-secondary inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 w-full sm:w-auto">
-                                    Clear Filters
+                                    <i data-lucide="x-circle" class="w-4 h-4 mr-2"></i> Clear Filters
                                 </a>
                             <?php endif; ?>
                             <button onclick="openProductModal('add')" type="button" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 w-full sm:w-auto">
@@ -877,7 +591,7 @@ unset($_SESSION['error_message']);
                             <tr class="table-row-hover">
                                 <td class="px-4 py-3 whitespace-nowrap text-sm">
                                     <input type="checkbox" name="selected_products[]" value="<?= $row['id'] ?>" data-max-stock="<?= $row['stock'] ?>"
-                                           onchange="toggleSaleQtyInput(this, <?= $row['id'] ?>)" <?= $row['stock'] <= 0 ? 'disabled' : '' ?>>
+                                            onchange="toggleSaleQtyInput(this, <?= $row['id'] ?>)" <?= $row['stock'] <= 0 ? 'disabled' : '' ?>>
                                 </td>
                                 <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($row['name']) ?></td>
                                 <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">Rp<?= number_format($row['price'], 0, ',', '.') ?></td>
@@ -888,7 +602,7 @@ unset($_SESSION['error_message']);
                                 </td>
                                 <td class="px-4 py-3 whitespace-nowrap text-sm">
                                     <input type="number" name="qty[<?= $row['id'] ?>]" min="1" max="<?= $row['stock'] ?>" value="1"
-                                           class="form-input-field w-20 px-2 py-1 text-sm" disabled>
+                                            class="form-input-field w-20 px-2 py-1 text-sm" disabled>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -901,6 +615,15 @@ unset($_SESSION['error_message']);
                     </table>
                 </div>
                 
+                <div class="mt-4">
+                    <label for="payment_method_sale" class="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                    <select name="payment_method_sale" id="payment_method_sale" required
+                        class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                        <option value="cash">Cash</option>
+                        <option value="qr">QR</option>
+                    </select>
+                </div>
+
                 <div class="flex items-center space-x-3 mt-6">
                     <button type="submit" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
                         <i data-lucide="shopping-cart" class="w-4 h-4 mr-2"></i> Complete Sale
@@ -927,7 +650,6 @@ unset($_SESSION['error_message']);
             sidebar.classList.toggle('z-40');
         }
 
-        // --- Generic Modal Functions ---
         const productFormModal = document.getElementById('productFormModal');
         const addStockModal = document.getElementById('addStockModal');
         const saleModal = document.getElementById('saleModal');
@@ -952,7 +674,6 @@ unset($_SESSION['error_message']);
             if (event.target == saleModal) closeModal('saleModal');
         }
 
-        // --- Product Form Modal (Add/Edit) ---
         const productModalTitle = document.getElementById('productModalTitle');
         const productForm = document.getElementById('productForm');
         const productIdModal = document.getElementById('product_id_modal');
@@ -966,18 +687,16 @@ unset($_SESSION['error_message']);
         function openProductModal(mode, productData = null) {
             productForm.reset();
             productIdModal.value = '';
-            // Remove required attributes from all fields in this form initially
             productForm.querySelectorAll('[required]').forEach(el => el.removeAttribute('required'));
 
             if (mode === 'add') {
                 productModalTitle.textContent = 'Add New Product';
-                initialStockFields.style.display = 'block'; // Show initial stock fields for new product
+                initialStockFields.style.display = 'block';
                 
-                // Set required attributes for add mode
                 productNameModal.setAttribute('required', '');
                 productPriceModal.setAttribute('required', '');
                 productStockModal.setAttribute('required', '');
-                productInitialBuyPriceModal.setAttribute('required', ''); // Initial buy price is required for initial stock
+                productInitialBuyPriceModal.setAttribute('required', '');
 
             } else if (mode === 'edit' && productData) {
                 productModalTitle.textContent = 'Edit Product: ' + productData.name;
@@ -986,20 +705,14 @@ unset($_SESSION['error_message']);
                 productDescriptionModal.value = productData.description;
                 productPriceModal.value = productData.price;
                 productStockModal.value = productData.stock;
-                initialStockFields.style.display = 'none'; // Hide initial stock fields when editing existing product
+                initialStockFields.style.display = 'none';
 
-                // Set required attributes for edit mode
                 productNameModal.setAttribute('required', '');
                 productPriceModal.setAttribute('required', '');
-                productStockModal.setAttribute('required', '');
-
-                // Note: initial_buy_price is only for initial stock add, not relevant for product edit.
-                // It should not be displayed or required for edit operations.
             }
             openModal('productFormModal');
         }
 
-        // --- Add Stock Modal ---
         const addStockProductId = document.getElementById('add_stock_product_id');
         const addStockProductName = document.getElementById('add_stock_product_name');
         const addStockQtyInput = document.getElementById('add_stock_qty');
@@ -1012,24 +725,23 @@ unset($_SESSION['error_message']);
             addStockProductId.value = productData.id;
             addStockProductName.textContent = productData.name;
             
-            // Set required attributes for add stock form
             addStockQtyInput.setAttribute('required', '');
             addStockBuyPriceInput.setAttribute('required', '');
 
             openModal('addStockModal');
         }
 
-        // --- Sale Modal ---
         const saleForm = document.getElementById('saleForm');
         function openSaleModal() {
-            saleForm.reset(); // Reset selections from previous sales
+            saleForm.reset();
             saleForm.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-                checkbox.checked = false; // Uncheck all checkboxes
+                checkbox.checked = false;
             });
             saleForm.querySelectorAll('input[type="number"]').forEach(input => {
-                input.disabled = true; // Disable all quantity inputs by default
-                input.value = 1; // Reset quantity to 1
+                input.disabled = true;
+                input.value = 1;
             });
+            document.getElementById('payment_method_sale').value = 'cash';
             openModal('saleModal');
         }
 
@@ -1039,11 +751,12 @@ unset($_SESSION['error_message']);
                 qtyInput.disabled = !checkbox.checked;
                 if (checkbox.checked) {
                     qtyInput.focus();
+                } else {
+                    qtyInput.value = 1;
                 }
             }
         }
 
-        // --- Confirmation Functions ---
         function confirmDelete(id, name) {
             if (confirm(`Are you sure you want to delete product: ${name}? This action cannot be undone.`)) {
                 window.location.href = `products.php?delete=${id}`;
@@ -1056,7 +769,6 @@ unset($_SESSION['error_message']);
             }
         }
 
-        // --- Toast Notifications ---
         const toastContainer = document.getElementById('toastContainer');
         function showToast(message, type) {
             const toast = document.createElement('div');
@@ -1069,7 +781,6 @@ unset($_SESSION['error_message']);
             }, 3500);
         }
 
-        // Display PHP session messages on page load
         <?php if ($success_message): ?>
             showToast('<?= $success_message ?>', 'success');
         <?php endif; ?>

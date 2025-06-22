@@ -3,47 +3,40 @@ session_start();
 require_once '../../config/database.php';
 require_once '../../controllers/AttendanceController.php';
 
-// Redirect user yang tidak berwenang
-if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin', 'staff'])) { // Sesuaikan role yang diizinkan
+if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin', 'staff'])) {
     header('Location: ../../login.php');
     exit;
 }
 
 $attendanceController = new AttendanceController($conn);
-$user_id = $_SESSION['user_id'] ?? 1; // Default ke 1 jika tidak ada user_id di session (untuk testing, pastikan di produksi ini selalu ada)
-$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
-$userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
+$user_id = $_SESSION['user_id'] ?? 1;
 
-// Ambil pesan sukses/error dari session untuk ditampilkan sebagai toast
 $success_message = $_SESSION['success_message'] ?? '';
 $error_message = $_SESSION['error_message'] ?? '';
 unset($_SESSION['success_message']);
 unset($_SESSION['error_message']);
 
-// Proses presensi masuk
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['member_id'])) {
     $member_id = (int)$_POST['member_id'];
-    if ($attendanceController->record($member_id, $user_id)) {
-        $_SESSION['success_message'] = "Attendance recorded successfully for member ID: " . $member_id;
+    $response = $attendanceController->recordAttendance($member_id, $user_id);
+
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
     } else {
-        $_SESSION['error_message'] = "Error recording attendance or member already checked in today.";
+        $_SESSION['error_message'] = $response['message'];
     }
     header("Location: attendance.php");
     exit;
 }
 
-// Ambil semua member aktif untuk dropdown
-$members_query = $conn->query("SELECT id, full_name FROM members WHERE status = 'active' ORDER BY full_name ASC");
-$members = $members_query->fetch_all(MYSQLI_ASSOC);
+$viewData = $attendanceController->getAttendanceForView($_GET);
 
-// Filter berdasarkan tanggal (opsional)
-$selected_date = $_GET['date'] ?? date('Y-m-d');
-// Validasi format tanggal sederhana
-if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $selected_date)) {
-    $selected_date = date('Y-m-d'); // Default to today if invalid
-}
+$members = $viewData['activeMembers'];
+$attendances = $viewData['attendances'];
+$selected_date = $viewData['selectedDate'];
 
-$attendances = $attendanceController->byDate($selected_date);
+$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
+$userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 ?>
 
 <!DOCTYPE html>
@@ -55,127 +48,8 @@ $attendances = $attendanceController->byDate($selected_date);
     <title>Manage Attendance - Gym Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="../../assets/css/style.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
-    <style>
-        body {
-            font-family: 'Inter', system-ui, sans-serif;
-        }
-
-        .sidebar-item {
-            transition: background-color 0.2s, color 0.2s;
-        }
-
-        .sidebar-item:hover {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item:hover .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .sidebar-item.active {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item.active .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .table-row-hover:hover {
-            background-color: #f9fafb;
-        }
-
-        .form-input-field:focus,
-        .form-select-field:focus,
-        .form-textarea-field:focus {
-            border-color: #ef4444;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
-            outline: none;
-        }
-
-        .form-input-field:hover,
-        .form-select-field:hover,
-        .form-textarea-field:hover {
-            border-color: #ef4444;
-        }
-
-        .btn-primary {
-            transition: background-color 0.2s, box-shadow 0.2s;
-        }
-
-        .btn-primary:hover {
-            background-color: #dc2626;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }
-
-        .btn-secondary {
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
-
-        .btn-secondary:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-            border-color: #ef4444;
-        }
-
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1050;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: none;
-        }
-
-        .toast {
-            background-color: #333;
-            color: #fff;
-            padding: 12px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-            opacity: 0;
-            transform: translateY(-20px);
-            animation: slideIn 0.5s forwards, fadeOut 0.5s 2.5s forwards;
-            pointer-events: all;
-            min-width: 250px;
-            text-align: center;
-        }
-
-        .toast.success {
-            background-color: #10b981;
-        }
-
-        .toast.error {
-            background-color: #ef4444;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes fadeOut {
-            from {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            to {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-        }
-    </style>
 </head>
 
 <body class="bg-gray-50 text-gray-900">
@@ -306,14 +180,14 @@ $attendances = $attendanceController->byDate($selected_date);
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
-                                <?php if ($attendances->num_rows > 0): ?>
-                                    <?php while ($row = $attendances->fetch_assoc()): ?>
+                                <?php if (count($attendances) > 0): ?>
+                                    <?php foreach ($attendances as $row): ?>
                                         <tr class="table-row-hover">
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900"><?= htmlspecialchars($row['full_name']) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= date('H:i:s, d M Y', strtotime($row['checkin_time'])) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($row['admin_name'] ?? '-') ?></td>
                                         </tr>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
                                 <?php else: ?>
                                     <tr>
                                         <td colspan="3" class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 text-center">No attendance recorded for this date.</td>
@@ -342,7 +216,6 @@ $attendances = $attendanceController->byDate($selected_date);
             sidebar.classList.toggle('z-40');
         }
 
-        // --- Toast Notifications ---
         const toastContainer = document.getElementById('toastContainer');
         function showToast(message, type) {
             const toast = document.createElement('div');
@@ -355,7 +228,6 @@ $attendances = $attendanceController->byDate($selected_date);
             }, 3500);
         }
 
-        // Display PHP session messages on page load
         <?php if ($success_message): ?>
             showToast('<?= $success_message ?>', 'success');
         <?php endif; ?>

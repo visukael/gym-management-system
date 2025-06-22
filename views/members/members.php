@@ -1,274 +1,60 @@
 <?php
 session_start();
 require_once '../../config/database.php';
-require_once '../../models/Transaction.php';
+require_once '../../controllers/MemberController.php';
 
+// Redirect unauthorized users
 if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin'])) {
     header('Location: ../../login.php');
     exit;
 }
 
-$trxModel = new Transaction($conn);
-
-$today = date('Y-m-d');
-$conn->query("UPDATE members SET status = 'inactive' WHERE expired_date < '$today' AND status = 'active'");
-
-$packages_result = $conn->query("SELECT * FROM membership_packages ORDER BY name ASC");
-$packages = [];
-while ($row = $packages_result->fetch_assoc()) {
-    $packages[] = $row;
-}
-
-$promos_result = $conn->query("
-    SELECT promotions.*, mp.name AS package_name
-    FROM promotions
-    LEFT JOIN membership_packages mp ON promotions.package_id = mp.id
-    WHERE promotions.start_date <= CURDATE() AND promotions.end_date >= CURDATE()
-    ORDER BY promotions.name ASC
-");
-$promos = [];
-while ($row = $promos_result->fetch_assoc()) {
-    $promos[] = $row;
-}
+$memberController = new MemberController($conn);
+$user_id = $_SESSION['user_id'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action_type = $_POST['action_type'] ?? 'add_edit';
-    $user_id = $_SESSION['user_id'];
+    $action_type = $_POST['action_type'] ?? '';
+    $response = ['success' => false, 'message' => 'Invalid action.'];
 
     if ($action_type === 'extend') {
-        $member_id_to_extend = (int)($_POST['member_id_extend'] ?? 0);
-        $package_id_extend = (int)($_POST['package_id_extend'] ?? 0);
-        $promo_id_extend = !empty($_POST['promo_id_extend']) ? (int)$_POST['promo_id_extend'] : null;
-
-        if (empty($member_id_to_extend) || empty($package_id_extend)) {
-            $_SESSION['error_message'] = "Missing required fields for extension. Please select a member and a package.";
-            header("Location: members.php");
-            exit;
-        }
-
-        $memberStmt = $conn->prepare("SELECT expired_date, full_name FROM members WHERE id = ?");
-        $memberStmt->bind_param("i", $member_id_to_extend);
-        $memberStmt->execute();
-        $current_member = $memberStmt->get_result()->fetch_assoc();
-        if (!$current_member) {
-            $_SESSION['error_message'] = "Member not found for extension.";
-            header("Location: members.php");
-            exit;
-        }
-        $member_name = $current_member['full_name'];
-
-        $pkg = null;
-        foreach ($packages as $p) {
-            if ($p['id'] == $package_id_extend) {
-                $pkg = $p;
-                break;
-            }
-        }
-        if (!$pkg) {
-            $_SESSION['error_message'] = "Invalid package selected for extension.";
-            header("Location: members.php");
-            exit;
-        }
-        $duration = $pkg['duration_months'];
-        $base_price = (float) $pkg['price'];
-        $package_name = $pkg['name'];
-
-        $discount = 0;
-        if (!empty($promo_id_extend)) {
-            $promo_data = null;
-            foreach ($promos as $pr) {
-                if ($pr['id'] == $promo_id_extend) {
-                    $promo_data = $pr;
-                    break;
-                }
-            }
-
-            if ($promo_data) {
-                $type = strtolower(trim($promo_data['discount_type']));
-                $value = (float) preg_replace('/[^0-9.]/', '', $promo_data['discount_value']);
-
-                if (in_array($type, ['flat', 'rp', 'nominal', 'uang'])) {
-                    $discount = $value;
-                } elseif (in_array($type, ['percent', 'persen', '%'])) {
-                    $discount = ($base_price * $value) / 100;
-                }
-            }
-        }
-        $final_price = max(0, $base_price - $discount);
-
-        $current_expired_date = $current_member['expired_date'];
-        $start_date_for_extension = (strtotime($current_expired_date) < strtotime($today)) ? $today : $current_expired_date;
-        $new_expired_date = date('Y-m-d', strtotime("+$duration months", strtotime($start_date_for_extension)));
-
-        $updateMemberStmt = $conn->prepare("UPDATE members SET expired_date = ?, package_id = ?, promo_id = ?, status = 'active' WHERE id = ?");
-        $updateMemberStmt->bind_param("siii", $new_expired_date, $package_id_extend, $promo_id_extend, $member_id_to_extend);
-
-        if ($updateMemberStmt->execute()) {
-            $trxModel->create([
-                'transaction_type' => 'member_extend',
-                'label' => 'income',
-                'description' => "Membership extension for: " . $member_name . " (Package: " . $package_name . ")",
-                'amount' => $base_price,
-                'discount' => $discount,
-                'final_amount' => $final_price,
-                'member_id' => $member_id_to_extend,
-                'product_id' => null,
-                'user_id' => $user_id
-            ]);
-            $_SESSION['success_message'] = "Member membership extended successfully!";
+        $response = $memberController->handleExtendMember($_POST, $user_id);
+    } elseif ($action_type === 'add_edit') {
+        $memberId = $_POST['id'] ?? '';
+        if (!empty($memberId)) {
+            $response = $memberController->handleUpdateMember((int)$memberId, $_POST);
         } else {
-            $_SESSION['error_message'] = "Error extending member membership: " . $conn->error;
-        }
-    } else { // add_edit
-        $id = $_POST['id'] ?? '';
-        $full_name = htmlspecialchars(trim($_POST['full_name']));
-        $phone = htmlspecialchars(trim($_POST['phone']));
-        $address = htmlspecialchars(trim($_POST['address']));
-        $email = !empty($_POST['email']) ? htmlspecialchars(trim($_POST['email'])) : null;
-        $age = !empty($_POST['age']) ? (int)$_POST['age'] : null;
-        $package_id = (int)$_POST['package_id_main'];
-        $promo_id = !empty($_POST['promo_id_main']) ? (int)$_POST['promo_id_main'] : null;
-
-        if (empty($full_name) || empty($phone) || empty($address) || empty($package_id)) {
-            $_SESSION['error_message'] = "Please fill all required fields for Add/Edit.";
-            header("Location: members.php");
-            exit;
-        }
-
-        $base_price = 0;
-        $discount = 0;
-        if (empty($id)) {
-             $pkg_data = null;
-             foreach ($packages as $p) {
-                if ($p['id'] == $package_id) {
-                    $pkg_data = $p;
-                    break;
-                }
-             }
-             if($pkg_data) {
-                $base_price = (float) $pkg_data['price'];
-             }
-
-             if (!empty($promo_id)) {
-                 $promo_data = null;
-                 foreach ($promos as $pr) {
-                    if ($pr['id'] == $promo_id) {
-                        $promo_data = $pr;
-                        break;
-                    }
-                 }
-                 if ($promo_data) {
-                     $type = strtolower(trim($promo_data['discount_type']));
-                     $value = (float) preg_replace('/[^0-9.]/', '', $promo_data['discount_value']);
-                     if (in_array($type, ['flat', 'rp', 'nominal', 'uang'])) {
-                         $discount = $value;
-                     } elseif (in_array($type, ['percent', 'persen', '%'])) {
-                         $discount = ($base_price * $value) / 100;
-                     }
-                 }
-             }
-        }
-        $final_price = max(0, $base_price - $discount);
-
-        if ($id) {
-            $stmt = $conn->prepare("UPDATE members SET full_name=?, phone=?, address=?, email=?, age=?, package_id=?, promo_id=? WHERE id=?");
-            $stmt->bind_param("ssssiiii", $full_name, $phone, $address, $email, $age, $package_id, $promo_id, $id);
-            if ($stmt->execute()) {
-                $_SESSION['success_message'] = "Member updated successfully!";
-            } else {
-                $_SESSION['error_message'] = "Error updating member: " . $conn->error;
-            }
-        } else {
-            $join_date_new = date('Y-m-d');
-            $pkg_new_member = null;
-            foreach ($packages as $p) {
-                if ($p['id'] == $package_id) {
-                    $pkg_new_member = $p;
-                    break;
-                }
-            }
-            $duration_new_member = $pkg_new_member['duration_months'];
-            $expired_date_new = date('Y-m-d', strtotime("+$duration_new_member months", strtotime($join_date_new)));
-            $status_new = 'active';
-
-            $stmt = $conn->prepare("INSERT INTO members (full_name, phone, address, email, age, join_date, expired_date, package_id, promo_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("ssssiissis", $full_name, $phone, $address, $email, $age, $join_date_new, $expired_date_new, $package_id, $promo_id, $status_new);
-            if ($stmt->execute()) {
-                $member_id = $conn->insert_id;
-
-                $trxModel->create([
-                    'transaction_type' => 'member_new',
-                    'label' => 'income',
-                    'description' => "New member registration: " . $full_name,
-                    'amount' => $base_price,
-                    'discount' => $discount,
-                    'final_amount' => $final_price,
-                    'member_id' => $member_id,
-                    'product_id' => null,
-                    'user_id' => $user_id
-                ]);
-                $_SESSION['success_message'] = "Member added successfully!";
-            } else {
-                $_SESSION['error_message'] = "Error adding member: " . $conn->error;
-            }
+            $response = $memberController->handleAddMember($_POST, $user_id);
         }
     }
 
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
+    } else {
+        $_SESSION['error_message'] = $response['message'];
+    }
     header("Location: members.php");
     exit;
 }
 
-$editData = null;
-if (isset($_GET['edit'])) {
-    $id = (int)$_GET['edit'];
-    $stmt = $conn->prepare("SELECT * FROM members WHERE id = ?");
-    $stmt->bind_param("i", $id);
-    $stmt->execute();
-    $res = $stmt->get_result();
-    $editData = $res->fetch_assoc();
-    echo "<script>document.addEventListener('DOMContentLoaded', () => openModal('edit', " . json_encode($editData) . "));</script>";
+if (isset($_GET['delete'])) {
+    $response = $memberController->handleDeleteMember((int)$_GET['delete']);
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
+    } else {
+        $_SESSION['error_message'] = $response['message'];
+    }
+    header("Location: members.php");
+    exit;
 }
 
-// Search and Filter Logic
-$searchTerm = $_GET['search'] ?? '';
-$filterStatus = $_GET['status'] ?? '';
+$viewData = $memberController->getMemberViewData($_GET);
 
-$sql = "SELECT m.*, p.name AS package_name
-        FROM members m
-        JOIN membership_packages p ON m.package_id = p.id
-        WHERE 1=1";
-
-$params = [];
-$types = "";
-
-if (!empty($searchTerm)) {
-    $sql .= " AND (m.full_name LIKE ? OR m.phone LIKE ? OR m.email LIKE ?)";
-    $params[] = '%' . $searchTerm . '%';
-    $params[] = '%' . $searchTerm . '%';
-    $params[] = '%' . $searchTerm . '%';
-    $types .= "sss";
-}
-
-if (!empty($filterStatus)) {
-    $sql .= " AND m.status = ?";
-    $params[] = $filterStatus;
-    $types .= "s";
-}
-
-$sql .= " ORDER BY m.id DESC";
-
-$members_stmt = $conn->prepare($sql);
-
-if (!empty($params)) {
-    $members_stmt->bind_param($types, ...$params);
-}
-$members_stmt->execute();
-$members_result = $members_stmt->get_result();
-
-$members = [];
-while($row = $members_result->fetch_assoc()){
-    $members[] = $row;
-}
+$members = $viewData['members'];
+$packages = $viewData['packages'];
+$promos = $viewData['promos'];
+$editData = $viewData['editData'];
+$searchTerm = $viewData['searchTerm'];
+$filterStatus = $viewData['filterStatus'];
 
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
 $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
@@ -288,191 +74,8 @@ unset($_SESSION['error_message']);
     <title>Manage Members - Gym Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="../../assets/css/style.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
-    <style>
-        body {
-            font-family: 'Inter', system-ui, sans-serif;
-        }
-
-        .sidebar-item {
-            transition: background-color 0.2s, color 0.2s;
-        }
-
-        .sidebar-item:hover {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item:hover .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .sidebar-item.active {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item.active .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .table-row-hover:hover {
-            background-color: #f9fafb;
-        }
-
-        .form-input-field:focus,
-        .form-select-field:focus {
-            border-color: #ef4444;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
-            outline: none;
-        }
-
-        .form-input-field:hover,
-        .form-select-field:hover {
-            border-color: #ef4444;
-        }
-
-        .btn-primary {
-            transition: background-color 0.2s, box-shadow 0.2s;
-        }
-        .btn-primary:hover {
-            background-color: #dc2626;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }
-
-        .btn-secondary {
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
-        .btn-secondary:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-            border-color: #ef4444;
-        }
-
-        .action-link {
-            transition: color 0.2s;
-        }
-        .action-link:hover {
-            color: #ef4444;
-        }
-        .action-link.text-blue-600:hover {
-            color: #2563eb;
-        }
-
-        .status-active {
-            background-color: #d1fae5;
-            color: #065f46;
-        }
-        .status-inactive {
-            background-color: #fee2e2;
-            color: #991b1b;
-        }
-        .status-pending {
-            background-color: #fef9c3;
-            color: #854d09;
-        }
-
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.4);
-            align-items: center;
-            justify-content: center;
-        }
-
-        .modal-content {
-            background-color: #fefefe;
-            margin: auto;
-            padding: 24px;
-            border-radius: 0.75rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            width: 90%;
-            max-width: 600px;
-            position: relative;
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-
-        .close-button {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #aaa;
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-
-        .close-button:hover,
-        .close-button:focus {
-            color: #ef4444;
-            text-decoration: none;
-            cursor: pointer;
-        }
-
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1050;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: none;
-        }
-
-        .toast {
-            background-color: #333;
-            color: #fff;
-            padding: 12px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-            opacity: 0;
-            transform: translateY(-20px);
-            animation: slideIn 0.5s forwards, fadeOut 0.5s 2.5s forwards;
-            pointer-events: all;
-            min-width: 250px;
-            text-align: center;
-        }
-
-        .toast.success {
-            background-color: #10b981;
-        }
-
-        .toast.error {
-            background-color: #ef4444;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes fadeOut {
-            from {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            to {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-        }
-    </style>
 </head>
 
 <body class="bg-gray-50 text-gray-900">
@@ -520,17 +123,15 @@ unset($_SESSION['error_message']);
                         </a>
                     </nav>
                     <div class="mt-auto">
-                        <div class="p-4 mt-4 bg-gray-50 rounded-lg">
-                            <div class="flex items-center">
-                                <div class="flex-shrink-0">
-                                    <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
-                                </div>
-                                <div class="ml-3">
-                                    <p class="text-sm font-medium"><?= $userName ?></p>
-                                    <p class="text-xs text-gray-500"><?= $userRole ?></p>
-                                </div>
+                        <a href="../settings/setting.php" class="flex items-center p-4 mt-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+                            <div class="flex-shrink-0">
+                                <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
                             </div>
-                        </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
+                                <p class="text-xs text-gray-500"><?= $userRole ?></p>
+                            </div>
+                        </a>
                     </div>
                 </div>
             </div>
@@ -587,7 +188,7 @@ unset($_SESSION['error_message']);
                             </button>
                             <?php if (!empty($searchTerm) || !empty($filterStatus)): ?>
                                 <a href="members.php" class="btn-secondary inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 w-full sm:w-auto">
-                                    Clear Filters
+                                    <i data-lucide="x-circle" class="w-4 h-4 mr-2"></i> Clear Filters
                                 </a>
                             <?php endif; ?>
                             <button onclick="openModal('add')" type="button" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 w-full sm:w-auto">
@@ -628,11 +229,11 @@ unset($_SESSION['error_message']);
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= date('d M Y', strtotime($row['expired_date'])) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm">
                                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
-                                                    <?php
-                                                    if ($row['status'] === 'active') echo 'status-active';
-                                                    else if ($row['status'] === 'inactive') echo 'status-inactive';
-                                                    else echo 'status-pending';
-                                                    ?>">
+                                                     <?php
+                                                     if ($row['status'] === 'active') echo 'status-active';
+                                                     else if ($row['status'] === 'inactive') echo 'status-inactive';
+                                                     else echo 'status-pending';
+                                                     ?>">
                                                     <?= ucfirst($row['status']) ?>
                                                 </span>
                                             </td>
@@ -724,6 +325,14 @@ unset($_SESSION['error_message']);
                             <?php endforeach; ?>
                         </select>
                     </div>
+                     <div>
+                        <label for="payment_method_new_member" class="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                        <select name="payment_method_new_member" id="payment_method_new_member" required
+                            class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                            <option value="cash">Cash</option>
+                            <option value="qr">QR</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div id="extendFields" class="hidden">
@@ -750,6 +359,14 @@ unset($_SESSION['error_message']);
                                     <?= htmlspecialchars($promo['name']) ?> - <?= htmlspecialchars($promo['package_name'] ?? 'General') ?> (<?= $promo['discount_type'] === 'percent' ? $promo['discount_value'] . '%' : 'Rp' . number_format($promo['discount_value'], 0, ',', '.') ?>)
                                 </option>
                             <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="payment_method_extend" class="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                        <select name="payment_method_extend" id="payment_method_extend" required
+                            class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                            <option value="cash">Cash</option>
+                            <option value="qr">QR</option>
                         </select>
                     </div>
                 </div>
@@ -800,9 +417,11 @@ unset($_SESSION['error_message']);
         const age_modal = document.getElementById('age_modal');
         const package_id_main_modal = document.getElementById('package_id_main_modal');
         const promo_id_main_modal = document.getElementById('promo_id_main_modal');
+        const payment_method_new_member = document.getElementById('payment_method_new_member');
 
         const package_id_extend = document.getElementById('package_id_extend');
         const promo_id_extend = document.getElementById('promo_id_extend');
+        const payment_method_extend = document.getElementById('payment_method_extend');
 
         const submitButton = document.getElementById('submitButton');
         const toastContainer = document.getElementById('toastContainer');
@@ -827,6 +446,7 @@ unset($_SESSION['error_message']);
                 phone_modal.setAttribute('required', '');
                 address_modal.setAttribute('required', '');
                 package_id_main_modal.setAttribute('required', '');
+                payment_method_new_member.setAttribute('required', '');
 
             } else if (mode === 'edit' && memberData) {
                 modalTitle.textContent = 'Edit Member';
@@ -858,6 +478,7 @@ unset($_SESSION['error_message']);
                 extendFields.classList.remove('hidden');
 
                 package_id_extend.setAttribute('required', '');
+                payment_method_extend.setAttribute('required', '');
 
                 currentExpiredDateSpan.textContent = new Date(memberData.expired_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 

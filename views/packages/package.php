@@ -2,21 +2,18 @@
 session_start();
 require_once '../../config/database.php';
 
-// --- Tambah / Edit Paket ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $name = $_POST['name'];
     $duration = $_POST['duration_months'];
     $price = $_POST['price'];
 
     if (isset($_POST['id']) && $_POST['id'] != '') {
-        // UPDATE
         $id = $_POST['id'];
         $stmt = $conn->prepare("UPDATE membership_packages SET name=?, duration_months=?, price=? WHERE id=?");
         $stmt->bind_param("sidi", $name, $duration, $price, $id);
         $stmt->execute();
         $message = "Paket berhasil diubah!";
     } else {
-        // INSERT
         $stmt = $conn->prepare("INSERT INTO membership_packages (name, duration_months, price) VALUES (?, ?, ?)");
         $stmt->bind_param("sid", $name, $duration, $price);
         $stmt->execute();
@@ -26,7 +23,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// --- Ambil Data untuk Edit ---
 $editData = null;
 if (isset($_GET['edit'])) {
     $id = $_GET['edit'];
@@ -36,7 +32,6 @@ if (isset($_GET['edit'])) {
     $editData = $stmt->get_result()->fetch_assoc();
 }
 
-// --- Hapus Paket ---
 if (isset($_GET['delete'])) {
     $id = $_GET['delete'];
     $stmt = $conn->prepare("DELETE FROM membership_packages WHERE id = ?");
@@ -46,7 +41,6 @@ if (isset($_GET['delete'])) {
     exit;
 }
 
-// --- Ambil Semua Paket ---
 $result = $conn->query("SELECT * FROM membership_packages ORDER BY id DESC");
 ?>
 

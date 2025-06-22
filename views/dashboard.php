@@ -9,7 +9,6 @@ if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner'
 
 $conn = $conn;
 
-// General dashboard data queries (remain the same)
 $incomeQuery = $conn->query("SELECT SUM(final_amount) AS total_income FROM transactions WHERE label = 'income'");
 $totalIncome = $incomeQuery->fetch_assoc()['total_income'] ?? 0;
 
@@ -44,11 +43,9 @@ $todayAttendanceList = $todayAttendanceDetailQuery->fetch_all(MYSQLI_ASSOC);
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
 $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 
-// Initial data for the chart (monthly income, default mode)
-// This data will be replaced by AJAX calls when period changes
 $initialMonthlyIncomeData = [];
 $initialMonthlyIncomeLabels = [];
-for ($i = 5; $i >= 0; $i--) { // Last 6 months
+for ($i = 5; $i >= 0; $i--) {
     $month = date('Y-m', strtotime("-$i months"));
     $monthLabel = date('M Y', strtotime("-$i months"));
     
@@ -59,7 +56,6 @@ for ($i = 5; $i >= 0; $i--) { // Last 6 months
     $initialMonthlyIncomeLabels[] = $monthLabel;
 }
 
-// Initial data for pie chart (income by transaction type) - always fetched
 $incomeByTypeData = [];
 $incomeByTypeLabels = [];
 $incomeByTypeColors = [];
@@ -88,48 +84,44 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
             font-family: 'Inter', system-ui, sans-serif;
         }
 
-        /* Sidebar Item Hover & Active */
         .sidebar-item {
             transition: background-color 0.2s, color 0.2s;
         }
 
         .sidebar-item:hover {
-            background-color: #fef2f2; /* red-50 */
-            color: #ef4444; /* red-500 */
+            background-color: #fef2f2;
+            color: #ef4444;
         }
 
         .sidebar-item:hover .sidebar-icon {
-            color: #ef4444; /* red-500 */
+            color: #ef4444;
         }
 
         .sidebar-item.active {
-            background-color: #fef2f2; /* red-50 */
-            color: #ef4444; /* red-500 */
+            background-color: #fef2f2;
+            color: #ef4444;
         }
 
         .sidebar-item.active .sidebar-icon {
-            color: #ef4444; /* red-500 */
+            color: #ef4444;
         }
 
-        /* Card Hover Effect */
         .card-item {
             transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
         }
 
         .card-item:hover {
             transform: translateY(-3px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* shadow-lg */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         }
 
-        /* Table Row Hover */
         .table-row-hover:hover {
-            background-color: #f9fafb; /* gray-50 */
+            background-color: #f9fafb;
         }
 
-        /* Button Hover for Selects */
         select:hover {
-            border-color: #ef4444; /* red-500 */
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2); /* red-500 with opacity */
+            border-color: #ef4444;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
         }
         
         .chart-placeholder {
@@ -427,16 +419,14 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
     <script>
         lucide.createIcons();
 
-        // Initial data for charts (monthly by default)
         const initialMonthlyIncomeLabels = <?= json_encode($initialMonthlyIncomeLabels) ?>;
         const initialMonthlyIncomeData = <?= json_encode($initialMonthlyIncomeData) ?>;
         const incomeByTypeLabels = <?= json_encode($incomeByTypeLabels) ?>;
         const incomeByTypeData = <?= json_encode($incomeByTypeData) ?>;
         const incomeByTypeColors = <?= json_encode($incomeByTypeColors) ?>;
 
-        let incomeChartInstance; // Variable to hold the chart instance
+        let incomeChartInstance;
 
-        // Function to fetch chart data via AJAX
         async function fetchChartData(period) {
             try {
                 const response = await fetch(`../api/get_chart_data.php?period=${period}`);
@@ -447,17 +437,15 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
                 return data;
             } catch (error) {
                 console.error('Error fetching chart data:', error);
-                return { labels: [], data: [] }; // Return empty data on error
+                return { labels: [], data: [] };
             }
         }
 
-        // Function to render or update the chart
         async function renderChart() {
             const chartType = document.getElementById('chartTypeSelect').value;
             const chartPeriod = document.getElementById('chartPeriodSelect').value;
             const ctx = document.getElementById('incomeChart').getContext('2d');
 
-            // Destroy existing chart if it exists
             if (incomeChartInstance) {
                 incomeChartInstance.destroy();
             }
@@ -465,7 +453,6 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
             let chartData, chartOptions;
 
             if (chartType === 'pie') {
-                // Pie chart data does not depend on period (it's income by type)
                 chartData = {
                     labels: incomeByTypeLabels,
                     datasets: [{
@@ -497,11 +484,10 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
                         }
                     }
                 };
-                // Hide period selection for pie chart
                 document.getElementById('chartPeriodSelect').style.display = 'none';
 
-            } else { // 'bar' or 'line'
-                const fetchedData = await fetchChartData(chartPeriod); // Fetch data based on period
+            } else {
+                const fetchedData = await fetchChartData(chartPeriod);
 
                 chartData = {
                     labels: fetchedData.labels,
@@ -510,8 +496,8 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
                         data: fetchedData.data,
                         backgroundColor: chartType === 'bar' ? '#ef4444' : 'rgba(239, 68, 68, 0.1)',
                         borderColor: '#ef4444',
-                        tension: chartType === 'line' ? 0.4 : 0, // Tension for line, 0 for bar
-                        fill: chartType === 'line', // Fill area for line chart
+                        tension: chartType === 'line' ? 0.4 : 0,
+                        fill: chartType === 'line',
                         borderWidth: 1
                     }]
                 };
@@ -536,7 +522,6 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
                         }
                     }
                 };
-                // Show period selection for bar/line charts
                 document.getElementById('chartPeriodSelect').style.display = 'block';
             }
 
@@ -547,7 +532,6 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
             });
         }
 
-        // Function to toggle sidebar for mobile
         function toggleSidebar() {
             const sidebar = document.querySelector('.md\\:flex-shrink-0');
             sidebar.classList.toggle('hidden');
@@ -559,14 +543,11 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
 
 
         document.addEventListener("DOMContentLoaded", function() {
-            // Initial chart rendering (default to bar chart, monthly period)
             renderChart();
 
-            // Event listener for chart type selection
             const chartTypeSelect = document.getElementById('chartTypeSelect');
             chartTypeSelect.addEventListener('change', renderChart);
 
-            // Event listener for chart period selection
             const chartPeriodSelect = document.getElementById('chartPeriodSelect');
             chartPeriodSelect.addEventListener('change', renderChart);
         });

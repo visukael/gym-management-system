@@ -3,7 +3,6 @@ session_start();
 require_once '../../config/database.php';
 require_once '../../models/User.php';
 
-// Redirect user yang tidak berwenang
 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'owner') {
     header('Location: ../../login.php');
     exit;
@@ -11,24 +10,21 @@ if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'owner') {
 
 $userModel = new User($conn);
 
-// Ambil pesan sukses/error dari session untuk ditampilkan sebagai toast
 $success_message = $_SESSION['success_message'] ?? '';
 $error_message = $_SESSION['error_message'] ?? '';
 unset($_SESSION['success_message']);
 unset($_SESSION['error_message']);
 
-// Tambah user baru
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
     $name = htmlspecialchars(trim($_POST['name']));
     $username = htmlspecialchars(trim($_POST['username']));
-    $password = $_POST['password']; // Password plain text
+    $password = $_POST['password'];
     $role = htmlspecialchars(trim($_POST['role']));
 
     if (empty($name) || empty($username) || empty($password) || empty($role)) {
         $_SESSION['error_message'] = "Please fill all required fields for adding a user.";
     } else {
-        // Check if username already exists
-        if ($userModel->getByUsername($username)) { // Menggunakan getByUsername
+        if ($userModel->getByUsername($username)) {
             $_SESSION['error_message'] = "Username already exists. Please choose a different one.";
         } else {
             $hashed_password = password_hash($password, PASSWORD_BCRYPT);
@@ -43,7 +39,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
     exit;
 }
 
-// Update user
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_user'])) {
     $id = intval($_POST['id']);
     $name = htmlspecialchars(trim($_POST['name']));
@@ -53,8 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_user'])) {
     if (empty($name) || empty($username) || empty($role)) {
         $_SESSION['error_message'] = "Please fill all required fields for updating a user.";
     } else {
-        // Check if username exists and belongs to another user
-        $existingUser = $userModel->getByUsername($username); // Menggunakan getByUsername
+        $existingUser = $userModel->getByUsername($username);
         if ($existingUser && $existingUser['id'] != $id) {
             $_SESSION['error_message'] = "Username already exists for another user. Please choose a different one.";
         } else {
@@ -69,7 +63,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_user'])) {
     exit;
 }
 
-// Ambil user untuk diedit
 $editUser = null;
 if (isset($_GET['edit'])) {
     $editId = intval($_GET['edit']);
@@ -81,7 +74,6 @@ if (isset($_GET['edit'])) {
     }
 }
 
-// Hapus user
 if (isset($_GET['delete'])) {
     $deleteId = intval($_GET['delete']);
     if ($deleteId === $_SESSION['user_id']) {
@@ -97,7 +89,6 @@ if (isset($_GET['delete'])) {
     exit;
 }
 
-// Ambil semua user
 $users = $userModel->getAll();
 
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
@@ -444,14 +435,12 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
             sidebar.classList.toggle('z-40');
         }
 
-        // --- Confirmation Functions ---
         function confirmDelete(id) {
             if (confirm(`Are you sure you want to delete this user (ID: ${id})? This action cannot be undone.`)) {
                 window.location.href = `user.php?delete=${id}`;
             }
         }
 
-        // --- Toast Notifications ---
         const toastContainer = document.getElementById('toastContainer');
         function showToast(message, type) {
             const toast = document.createElement('div');
@@ -464,7 +453,6 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
             }, 3500);
         }
 
-        // Display PHP session messages on page load
         <?php if ($success_message): ?>
             showToast('<?= $success_message ?>', 'success');
         <?php endif; ?>
