@@ -43,9 +43,15 @@ class User {
         return $stmt->get_result()->fetch_assoc();
     }
 
-    public function update($id, $name, $username, $role) {
-        $stmt = $this->conn->prepare("UPDATE users SET name = ?, username = ?, role = ? WHERE id = ?");
-        $stmt->bind_param("sssi", $name, $username, $role, $id);
+    public function update($id, $name, $role) {
+        $stmt = $this->conn->prepare("UPDATE users SET name = ?, role = ? WHERE id = ?");
+        $stmt->bind_param("ssi", $name, $role, $id);
+        return $stmt->execute();
+    }
+
+    public function updatePassword($id, $hashedPassword) {
+        $stmt = $this->conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+        $stmt->bind_param("si", $hashedPassword, $id);
         return $stmt->execute();
     }
 }

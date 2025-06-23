@@ -82,6 +82,10 @@ $totalPages = ceil($totalRecords / $recordsPerPage);
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
 $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 
+$userRoleForAccess = $_SESSION['user_role'] ?? '';
+$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
+$userRoleDisplay = htmlspecialchars(ucfirst($userRoleForAccess));
+
 $success_message = $_SESSION['success_message'] ?? '';
 $error_message = $_SESSION['error_message'] ?? '';
 unset($_SESSION['success_message']);
@@ -112,35 +116,39 @@ unset($_SESSION['error_message']);
                 </div>
                 <div class="flex flex-col flex-grow px-4 py-4 overflow-y-auto">
                     <nav class="flex-1 space-y-2">
-                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'dashboard.php') ? 'active' : '' ?>">
                             <i data-lucide="layout-dashboard" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Dashboard
                         </a>
-                        <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'members.php') ? 'active' : '' ?>">
                             <i data-lucide="users" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Members
                         </a>
-                        <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'products.php') ? 'active' : '' ?>">
                             <i data-lucide="shopping-bag" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Products
                         </a>
-                        <a href="transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item active">
+                        <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'transactions.php') ? 'active' : '' ?>">
                             <i data-lucide="credit-card" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Transactions
                         </a>
-                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'attendance.php') ? 'active' : '' ?>">
                             <i data-lucide="calendar-check" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Attendance
                         </a>
-                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'promotions.php') ? 'active' : '' ?>">
                             <i data-lucide="percent" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Promotions
                         </a>
-                        <a href="../users/user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Manage Users
-                        </a>
-                        <a href="../../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+
+                        <?php if ($userRoleForAccess === 'owner'): ?>
+                            <a href="user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'user.php') ? 'active' : '' ?>">
+                                <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                                Manage Users
+                            </a>
+                        <?php endif; ?>
+
+                        <a href="../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
                             <i data-lucide="log-out" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Logout
                         </a>
@@ -152,7 +160,7 @@ unset($_SESSION['error_message']);
                             </div>
                             <div class="ml-3">
                                 <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
-                                <p class="text-xs text-gray-500"><?= $userRole ?></p>
+                                <p class="text-xs text-gray-500"><?= $userRoleDisplay ?></p>
                             </div>
                         </a>
                     </div>
@@ -183,7 +191,7 @@ unset($_SESSION['error_message']);
                     </div>
                 </div>
 
-                  <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-6">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-6">
                     <form method="GET" action="transactions.php" class="flex flex-col lg:flex-row gap-4 items-center">
                         <div class="flex flex-col sm:flex-row gap-4 flex-grow">
                             <div class="relative flex-grow">
@@ -306,7 +314,7 @@ unset($_SESSION['error_message']);
                         <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                             <?php if ($currentPage > 1): ?>
                                 <a href="?<?= http_build_query(array_merge($_GET, ['page' => $currentPage - 1])) ?>"
-                                   class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                                    class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                                     <span class="sr-only">Previous</span>
                                     <i data-lucide="chevron-left" class="h-5 w-5"></i>
                                 </a>
@@ -314,14 +322,14 @@ unset($_SESSION['error_message']);
 
                             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                                 <a href="?<?= http_build_query(array_merge($_GET, ['page' => $i])) ?>"
-                                   class="<?= $i === $currentPage ? 'z-10 bg-red-50 border-red-500 text-red-600' : 'bg-white border-gray-300 text-gray-700' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium hover:bg-gray-50">
+                                    class="<?= $i === $currentPage ? 'z-10 bg-red-50 border-red-500 text-red-600' : 'bg-white border-gray-300 text-gray-700' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium hover:bg-gray-50">
                                     <?= $i ?>
                                 </a>
                             <?php endfor; ?>
 
                             <?php if ($currentPage < $totalPages): ?>
                                 <a href="?<?= http_build_query(array_merge($_GET, ['page' => $currentPage + 1])) ?>"
-                                   class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                                    class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                                     <span class="sr-only">Next</span>
                                     <i data-lucide="chevron-right" class="h-5 w-5"></i>
                                 </a>
@@ -360,7 +368,7 @@ unset($_SESSION['error_message']);
                     <input type="number" name="amount" id="manual_amount" required min="100" step="100"
                         class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
                 </div>
-                
+
                 <div>
                     <label for="manual_payment_method" class="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
                     <select name="payment_method" id="manual_payment_method" required
@@ -369,7 +377,7 @@ unset($_SESSION['error_message']);
                         <option value="qr">QR</option>
                     </select>
                 </div>
-                
+
                 <div class="flex items-center space-x-3 mt-6">
                     <button type="submit" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
                         <i data-lucide="plus-circle" class="w-4 h-4 mr-2"></i> Add Transaction
@@ -428,6 +436,7 @@ unset($_SESSION['error_message']);
         }
 
         const toastContainer = document.getElementById('toastContainer');
+
         function showToast(message, type) {
             const toast = document.createElement('div');
             toast.className = 'toast ' + type;

@@ -22,7 +22,34 @@ class TransactionController {
         ]);
     }
 
-    public function getAll() {
-        return $this->transactionModel->all();
+    public function getAllTransactionsForView($getParams) {
+        $recordsPerPage = 50;
+        $currentPage = isset($getParams['page']) ? (int)$getParams['page'] : 1;
+        if ($currentPage < 1) $currentPage = 1;
+        $offset = ($currentPage - 1) * $recordsPerPage;
+
+        $filters = [
+            'search' => $getParams['search'] ?? '',
+            'type' => $getParams['type'] ?? '',
+            'label' => $getParams['label'] ?? '',
+            'sortBy' => $getParams['sort_by'] ?? '',
+            'payment_method' => $getParams['payment_method'] ?? ''
+        ];
+
+        $transactions = $this->transactionModel->getFilteredTransactions($filters, $recordsPerPage, $offset);
+        $totalRecords = $this->transactionModel->countFilteredTransactions($filters);
+        $totalPages = ceil($totalRecords / $recordsPerPage);
+
+        return [
+            'transactions' => $transactions,
+            'totalRecords' => $totalRecords,
+            'currentPage' => $currentPage,
+            'totalPages' => $totalPages,
+            'searchTerm' => $filters['search'],
+            'filterType' => $filters['type'],
+            'filterLabel' => $filters['label'],
+            'sortBy' => $filters['sortBy'],
+            'filterPaymentMethod' => $filters['payment_method']
+        ];
     }
 }

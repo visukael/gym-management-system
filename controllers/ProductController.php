@@ -2,59 +2,17 @@
 
 require_once __DIR__ . '/../models/Product.php';
 require_once __DIR__ . '/../models/Transaction.php';
-require_once __DIR__ . '/ProductStockController.php';
+require_once __DIR__ . '/../models/ProductStock.php';
 
 class ProductController {
     private $productModel;
     private $transactionModel;
-    private $productStockController;
+    private $productStockEntryModel;
 
     public function __construct($conn) {
         $this->productModel = new Product($conn);
         $this->transactionModel = new Transaction($conn);
-        $this->productStockController = new ProductStockController($conn);
-    }
-
-    public function sellProduct($productId, $qty, $userId, $paymentMethod) {
-        $product = $this->productModel->getById($productId);
-
-        if (!$product) {
-            return ['success' => false, 'message' => "Product not found."];
-        }
-        if ($product['stock'] < $qty) {
-            return ['success' => false, 'message' => "Not enough stock for " . htmlspecialchars($product['name']) . ". Available: " . $product['stock']];
-        }
-
-        $total = $product['price'] * $qty;
-
-        $stockUpdateResult = $this->productModel->removeStock($productId, $qty);
-
-        if (!$stockUpdateResult) {
-            error_log("ProductController: Failed to remove stock for product ID #{$productId}.");
-            return ['success' => false, 'message' => "Failed to update product stock."];
-        }
-
-        $transactionData = [
-            'transaction_type' => 'product_sale',
-            'label' => 'income',
-            'description' => "Sale: {$product['name']} x{$qty}",
-            'amount' => $total,
-            'discount' => 0,
-            'final_amount' => $total,
-            'member_id' => null,
-            'product_id' => $productId,
-            'user_id' => $userId,
-            'payment_method' => $paymentMethod
-        ];
-
-        $transactionResult = $this->transactionModel->create($transactionData);
-
-        if ($transactionResult) {
-            return ['success' => true, 'message' => "Product sale for " . htmlspecialchars($product['name']) . " processed successfully!"];
-        } else {
-            error_log("ProductController: Failed to create transaction for product sale: " . $product['name'] . " x" . $qty . ".");
-            return ['success' => false, 'message' => "Product sold, but failed to record transaction."];
-        }
+        $this->productStockEntryModel = new ProductStock($conn);
     }
 
     public function handleProductSubmit($formData, $userId) {
@@ -81,7 +39,7 @@ class ProductController {
 
             if ($newProductId) {
                 if ($stock > 0 && $initial_buy_price > 0) {
-                    $stockAddResponse = $this->productStockController->addStock($newProductId, $stock, $initial_buy_price, $userId);
+                    $stockAddResponse = $this->addStockInternal($newProductId, $stock, $initial_buy_price, $userId);
                     if (!$stockAddResponse['success']) {
                         error_log("ProductController: Failed to record initial stock transaction/entry for new product ID #{$newProductId}. Message: " . $stockAddResponse['message']);
                     }
@@ -93,15 +51,54 @@ class ProductController {
         }
     }
 
+    private function addStockInternal($productId, $quantity, $buyPrice, $userId) {
+        $product = $this->productModel->getById($productId);
+        if (!$product) {
+            return ['success' => false, 'message' => "Product not found for stock addition."];
+        }
+
+        $stockEntryAdded = $this->productStockEntryModel->addStockEntry($productId, $quantity, $buyPrice);
+        if (!$stockEntryAdded) {
+            error_log("ProductController (Internal): Failed to log stock entry history for product ID #{$productId}.");
+            return ['success' => false, 'message' => "Failed to log stock entry history."];
+        }
+
+        $stockUpdated = $this->productModel->addStock($productId, $quantity);
+        if (!$stockUpdated) {
+            error_log("ProductController (Internal): Failed to update main product stock for ID #{$productId} after entry was logged.");
+            return ['success' => false, 'message' => "Failed to update product's main stock count."];
+        }
+
+        if ($buyPrice > 0) {
+            $transactionData = [
+                'transaction_type' => 'stock_add',
+                'label' => 'outcome',
+                'description' => htmlspecialchars($product['name']) . " x{$quantity} (Total: Rp" . number_format($buyPrice, 0, ',', '.') . ")",
+                'amount' => $buyPrice,
+                'discount' => 0,
+                'final_amount' => $buyPrice,
+                'member_id' => null,
+                'product_id' => $productId,
+                'user_id' => $userId,
+                'payment_method' => 'cash'
+            ];
+            $transactionCreated = $this->transactionModel->create($transactionData);
+            if (!$transactionCreated) {
+                error_log("ProductController (Internal): Failed to create transaction for stock addition product ID #{$productId}.");
+                return ['success' => false, 'message' => "Stock added successfully, but failed to record transaction."];
+            }
+        }
+        
+        return ['success' => true, 'message' => "Stock for " . htmlspecialchars($product['name']) . " added successfully!"];
+    }
 
     public function handleAddStock($formData, $userId) {
         $productId = (int)($formData['product_id'] ?? 0);
         $qty = (int)($formData['qty'] ?? 0);
         $buyPrice = (float)($formData['buy_price'] ?? 0);
 
-        return $this->productStockController->addStock($productId, $qty, $buyPrice, $userId);
+        return $this->addStockInternal($productId, $qty, $buyPrice, $userId);
     }
-
 
     public function handleProcessSale($formData, $userId) {
         $selected_products_ids = $formData['selected_products'] ?? [];
@@ -160,7 +157,6 @@ class ProductController {
         }
     }
 
-
     public function handleMissingProduct($productId, $userId) {
         $product = $this->productModel->getById($productId);
         if ($product && $product['stock'] > 0) {
@@ -186,13 +182,9 @@ class ProductController {
         }
     }
 
-
     public function handleDeleteProduct($productId) {
-        if ($this->productModel->deleteProduct($productId)) {
-            return ['success' => true, 'message' => "Product deleted successfully!"];
-        } else {
-            return ['success' => false, 'message' => "Error deleting product. It might be referenced in transactions or stock entries."];
-        }
+        $deleteResult = $this->productModel->deleteProduct($productId);
+        return $deleteResult;
     }
 
     public function getProductViewData($getParams) {

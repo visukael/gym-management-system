@@ -3,6 +3,10 @@ session_start();
 require_once '../../config/database.php';
 require_once '../../models/User.php';
 
+$userRoleForAccess = $_SESSION['user_role'] ?? '';
+$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
+$userRoleDisplay = htmlspecialchars(ucfirst($userRoleForAccess));
+
 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'owner') {
     header('Location: ../../login.php');
     exit;
@@ -15,44 +19,70 @@ $error_message = $_SESSION['error_message'] ?? '';
 unset($_SESSION['success_message']);
 unset($_SESSION['error_message']);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
-    $name = htmlspecialchars(trim($_POST['name']));
-    $username = htmlspecialchars(trim($_POST['username']));
-    $password = $_POST['password'];
-    $role = htmlspecialchars(trim($_POST['role']));
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['add_user'])) {
+        $name = htmlspecialchars(trim($_POST['name']));
+        $username = htmlspecialchars(trim($_POST['username']));
+        $password = $_POST['password'];
+        $role = htmlspecialchars(trim($_POST['role']));
 
-    if (empty($name) || empty($username) || empty($password) || empty($role)) {
-        $_SESSION['error_message'] = "Please fill all required fields for adding a user.";
-    } else {
-        if ($userModel->getByUsername($username)) {
-            $_SESSION['error_message'] = "Username already exists. Please choose a different one.";
+        if (empty($name) || empty($username) || empty($password) || empty($role)) {
+            $_SESSION['error_message'] = "Please fill all required fields for adding a user.";
         } else {
-            $hashed_password = password_hash($password, PASSWORD_BCRYPT);
-            if ($userModel->create($name, $username, $hashed_password, $role)) {
-                $_SESSION['success_message'] = "User '" . $name . "' added successfully!";
+            if ($_SESSION['user_role'] === 'admin' && $role === 'owner') {
+                $_SESSION['error_message'] = "Admin cannot create an 'owner' account.";
             } else {
-                $_SESSION['error_message'] = "Error adding user.";
+                if ($userModel->findByUsername($username)) { 
+                    $_SESSION['error_message'] = "Username already exists. Please choose a different one.";
+                } else {
+                    $hashed_password = password_hash($password, PASSWORD_BCRYPT);
+                    if ($userModel->create($name, $username, $hashed_password, $role)) {
+                        $_SESSION['success_message'] = "User '" . $name . "' added successfully!";
+                    } else {
+                        $_SESSION['error_message'] = "Error adding user.";
+                    }
+                }
             }
         }
-    }
-    header("Location: user.php");
-    exit;
-}
+    } elseif (isset($_POST['update_user'])) {
+        $id = intval($_POST['id']);
+        $name = htmlspecialchars(trim($_POST['name']));
+        $role = htmlspecialchars(trim($_POST['role']));
+        $new_password = $_POST['new_password'] ?? ''; 
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_user'])) {
-    $id = intval($_POST['id']);
-    $name = htmlspecialchars(trim($_POST['name']));
-    $username = htmlspecialchars(trim($_POST['username']));
-    $role = htmlspecialchars(trim($_POST['role']));
-
-    if (empty($name) || empty($username) || empty($role)) {
-        $_SESSION['error_message'] = "Please fill all required fields for updating a user.";
-    } else {
-        $existingUser = $userModel->getByUsername($username);
-        if ($existingUser && $existingUser['id'] != $id) {
-            $_SESSION['error_message'] = "Username already exists for another user. Please choose a different one.";
+        if (empty($name) || empty($role)) {
+            $_SESSION['error_message'] = "Please fill all required fields for updating a user.";
         } else {
-            if ($userModel->update($id, $name, $username, $role)) {
+            $currentUser = $userModel->getById($id);
+            if (!$currentUser) {
+                $_SESSION['error_message'] = "User not found for update.";
+                header("Location: user.php");
+                exit;
+            }
+
+            if ($_SESSION['user_role'] === 'admin' && $role === 'owner' && $currentUser['id'] !== $_SESSION['user_id']) {
+                $_SESSION['error_message'] = "Admin cannot change another user's role to 'owner'.";
+                header("Location: user.php");
+                exit;
+            }
+            if ($id === $_SESSION['user_id'] && $_SESSION['user_role'] === 'owner' && $role !== 'owner') {
+                 $_SESSION['error_message'] = "You cannot demote your own 'owner' account.";
+                 header("Location: user.php");
+                 exit;
+            }
+
+            $updateSuccess = $userModel->update($id, $name, $currentUser['username'], $role);
+
+            if (!empty($new_password)) {
+                $hashed_new_password = password_hash($new_password, PASSWORD_BCRYPT);
+                $passwordUpdateSuccess = $userModel->updatePassword($id, $hashed_new_password);
+                if (!$passwordUpdateSuccess) {
+                    $updateSuccess = false;
+                    error_log("Failed to update password for user ID: " . $id);
+                }
+            }
+
+            if ($updateSuccess) {
                 $_SESSION['success_message'] = "User '" . $name . "' updated successfully!";
             } else {
                 $_SESSION['error_message'] = "Error updating user.";
@@ -72,6 +102,11 @@ if (isset($_GET['edit'])) {
         header("Location: user.php");
         exit;
     }
+    if ($_SESSION['user_role'] === 'admin' && $editUser['role'] === 'owner' && $editUser['id'] !== $_SESSION['user_id']) {
+        $_SESSION['error_message'] = "You do not have permission to edit this user.";
+        header("Location: user.php");
+        exit;
+    }
 }
 
 if (isset($_GET['delete'])) {
@@ -79,10 +114,15 @@ if (isset($_GET['delete'])) {
     if ($deleteId === $_SESSION['user_id']) {
         $_SESSION['error_message'] = "You cannot delete your own account.";
     } else {
-        if ($userModel->delete($deleteId)) {
-            $_SESSION['success_message'] = "User deleted successfully!";
+        $userToDelete = $userModel->getById($deleteId);
+        if ($userToDelete && $userToDelete['role'] === 'owner' && $_SESSION['user_role'] === 'admin') {
+            $_SESSION['error_message'] = "Admin cannot delete an 'owner' account.";
         } else {
-            $_SESSION['error_message'] = "Error deleting user. User might have related data.";
+            if ($userModel->delete($deleteId)) {
+                $_SESSION['success_message'] = "User deleted successfully!";
+            } else {
+                $_SESSION['error_message'] = "Error deleting user. User might have related data (e.g., created attendance/transactions).";
+            }
         }
     }
     header("Location: user.php");
@@ -92,7 +132,7 @@ if (isset($_GET['delete'])) {
 $users = $userModel->getAll();
 
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
-$userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
+$userRoleDisplay = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 ?>
 
 <!DOCTYPE html>
@@ -105,201 +145,74 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
-    <style>
-        body {
-            font-family: 'Inter', system-ui, sans-serif;
-        }
-
-        .sidebar-item {
-            transition: background-color 0.2s, color 0.2s;
-        }
-
-        .sidebar-item:hover {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item:hover .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .sidebar-item.active {
-            background-color: #fef2f2;
-            color: #ef4444;
-        }
-
-        .sidebar-item.active .sidebar-icon {
-            color: #ef4444;
-        }
-
-        .table-row-hover:hover {
-            background-color: #f9fafb;
-        }
-
-        .form-input-field:focus,
-        .form-select-field:focus,
-        .form-textarea-field:focus {
-            border-color: #ef4444;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
-            outline: none;
-        }
-
-        .form-input-field:hover,
-        .form-select-field:hover,
-        .form-textarea-field:hover {
-            border-color: #ef4444;
-        }
-
-        .btn-primary {
-            transition: background-color 0.2s, box-shadow 0.2s;
-        }
-
-        .btn-primary:hover {
-            background-color: #dc2626;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }
-
-        .btn-secondary {
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-        }
-
-        .btn-secondary:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-            border-color: #ef4444;
-        }
-
-        .action-link {
-            transition: color 0.2s;
-        }
-        .action-link:hover {
-            color: #ef4444;
-        }
-        .action-link.text-blue-600:hover {
-            color: #2563eb;
-        }
-        .action-link.text-red-600:hover {
-            color: #dc2626;
-        }
-
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1050;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: none;
-        }
-
-        .toast {
-            background-color: #333;
-            color: #fff;
-            padding: 12px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-            opacity: 0;
-            transform: translateY(-20px);
-            animation: slideIn 0.5s forwards, fadeOut 0.5s 2.5s forwards;
-            pointer-events: all;
-            min-width: 250px;
-            text-align: center;
-        }
-
-        .toast.success {
-            background-color: #10b981;
-        }
-
-        .toast.error {
-            background-color: #ef4444;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes fadeOut {
-            from {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            to {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-        }
-    </style>
-</head>
+    <link rel="stylesheet" href="../../assets/css/style.css"> </head>
 
 <body class="bg-gray-50 text-gray-900">
     <div class="flex h-screen overflow-hidden">
         <div class="hidden md:flex md:flex-shrink-0">
-            <div class="flex flex-col w-64 border-r border-gray-200 bg-white">
-                <div class="flex items-center justify-center h-16 px-4 border-b border-gray-200">
-                    <div class="flex items-center">
-                        <span class="ml-2 text-xl font-bold text-red-600">FORZA</span>
-                    </div>
-                </div>
-                <div class="flex flex-col flex-grow px-4 py-4 overflow-y-auto">
-                    <nav class="flex-1 space-y-2">
-                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="layout-dashboard" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Dashboard
-                        </a>
-                        <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="users" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Members
-                        </a>
-                        <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="shopping-bag" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Products
-                        </a>
-                        <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="credit-card" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Transactions
-                        </a>
-                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="calendar-check" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Attendance
-                        </a>
-                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="percent" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Promotions
-                        </a>
-                        <a href="user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item active">
-                            <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Manage Users
-                        </a>
-                        <a href="../../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="log-out" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Logout
-                        </a>
-                    </nav>
-                    <div class="mt-auto">
-                        <div class="p-4 mt-4 bg-gray-50 rounded-lg">
-                            <div class="flex items-center">
-                                <div class="flex-shrink-0">
-                                    <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
-                                </div>
-                                <div class="ml-3">
-                                    <p class="text-sm font-medium"><?= $userName ?></p>
-                                    <p class="text-xs text-gray-500"><?= $userRole ?></p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+    <div class="flex flex-col w-64 border-r border-gray-200 bg-white">
+        <div class="flex items-center justify-center h-16 px-4 border-b border-gray-200">
+            <div class="flex items-center">
+                <span class="ml-2 text-xl font-bold text-red-600">FORZA</span>
             </div>
         </div>
+        <div class="flex flex-col flex-grow px-4 py-4 overflow-y-auto">
+            <nav class="flex-1 space-y-2">
+                <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'dashboard.php') ? 'active' : '' ?>">
+                    <i data-lucide="layout-dashboard" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Dashboard
+                </a>
+                <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'members.php') ? 'active' : '' ?>">
+                    <i data-lucide="users" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Members
+                </a>
+                <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'products.php') ? 'active' : '' ?>">
+                    <i data-lucide="shopping-bag" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Products
+                </a>
+                <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'transactions.php') ? 'active' : '' ?>">
+                    <i data-lucide="credit-card" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Transactions
+                </a>
+                <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'attendance.php') ? 'active' : '' ?>">
+                    <i data-lucide="calendar-check" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Attendance
+                </a>
+                <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'promotions.php') ? 'active' : '' ?>">
+                    <i data-lucide="percent" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Promotions
+                </a>
+                
+                <?php if ($userRoleForAccess === 'owner'): ?>
+                <a href="user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'user.php') ? 'active' : '' ?>">
+                    <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Manage Users
+                </a>
+                <?php endif; ?>
+
+                <a href="../settings/setting.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'setting.php') ? 'active' : '' ?>">
+                    <i data-lucide="user" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    My Profile
+                </a>
+                <a href="../../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                    <i data-lucide="log-out" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                    Logout
+                </a>
+            </nav>
+            <div class="mt-auto">
+                <a href="../settings/setting.php" class="flex items-center p-4 mt-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+                    <div class="flex-shrink-0">
+                        <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
+                        <p class="text-xs text-gray-500"><?= $userRoleDisplay ?></p>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
 
         <div class="flex flex-col flex-1 overflow-hidden">
             <div class="flex items-center justify-between h-16 px-4 border-b border-gray-200 bg-white">
@@ -339,14 +252,20 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 
                         <div>
                             <label for="username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                            <input type="text" name="username" id="username" required value="<?= htmlspecialchars($editUser['username'] ?? '') ?>"
-                                class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
-                        </div>
+                            <input type="text" name="username_display" id="username_display" value="<?= htmlspecialchars($editUser['username'] ?? '') ?>"
+                                class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-100 cursor-not-allowed sm:text-sm" readonly>
+                            <input type="hidden" name="username" value="<?= htmlspecialchars($editUser['username'] ?? '') ?>"> </div>
 
                         <?php if (!$editUser): ?>
                             <div>
                                 <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
                                 <input type="password" name="password" id="password" required
+                                    class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                            </div>
+                        <?php else: ?>
+                            <div>
+                                <label for="new_password" class="block text-sm font-medium text-gray-700 mb-1">New Password (Leave blank to keep current)</label>
+                                <input type="password" name="new_password" id="new_password"
                                     class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
                             </div>
                         <?php endif; ?>
@@ -355,9 +274,11 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
                             <label for="role" class="block text-sm font-medium text-gray-700 mb-1">Role</label>
                             <select name="role" id="role" required
                                 class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
-                                <option value="admin" <?= (isset($editUser) && $editUser['role'] == 'admin') ? 'selected' : '' ?>>Admin</option>
-                                <option value="owner" <?= (isset($editUser) && $editUser['role'] == 'owner') ? 'selected' : '' ?>>Owner</option>
                                 <option value="staff" <?= (isset($editUser) && $editUser['role'] == 'staff') ? 'selected' : '' ?>>Staff</option>
+                                <option value="admin" <?= (isset($editUser) && $editUser['role'] == 'admin') ? 'selected' : '' ?>>Admin</option>
+                                <?php if ($_SESSION['user_role'] === 'owner'): ?>
+                                    <option value="owner" <?= (isset($editUser) && $editUser['role'] == 'owner') ? 'selected' : '' ?>>Owner</option>
+                                <?php endif; ?>
                             </select>
                         </div>
                         
@@ -395,12 +316,20 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars(ucfirst($u['role'])) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-center text-sm font-medium">
                                                 <?php if ($u['id'] != $_SESSION['user_id']): ?>
-                                                    <a href="?edit=<?= $u['id'] ?>" class="action-link text-blue-600 hover:text-blue-900 mr-3">
-                                                        <i data-lucide="edit" class="w-4 h-4 inline-block align-text-bottom"></i> Edit
-                                                    </a>
-                                                    <button onclick="confirmDelete(<?= $u['id'] ?>)" class="action-link text-red-600 hover:text-red-900">
-                                                        <i data-lucide="trash-2" class="w-4 h-4 inline-block align-text-bottom"></i> Delete
-                                                    </button>
+                                                    <?php if ($_SESSION['user_role'] === 'owner' || ($_SESSION['user_role'] === 'admin' && $u['role'] === 'staff')): // Owner can edit all, Admin can edit staff ?>
+                                                        <a href="?edit=<?= $u['id'] ?>" class="action-link text-blue-600 hover:text-blue-900 mr-3">
+                                                            <i data-lucide="edit" class="w-4 h-4 inline-block align-text-bottom"></i> Edit
+                                                        </a>
+                                                    <?php endif; ?>
+
+                                                    <?php if ($_SESSION['user_role'] === 'owner' || ($_SESSION['user_role'] === 'admin' && $u['role'] === 'staff')): // Owner can delete all, Admin can delete staff ?>
+                                                        <button onclick="confirmDelete(<?= $u['id'] ?>, '<?= htmlspecialchars($u['name']) ?>', '<?= htmlspecialchars($u['role']) ?>')" class="action-link text-red-600 hover:text-red-900">
+                                                            <i data-lucide="trash-2" class="w-4 h-4 inline-block align-text-bottom"></i> Delete
+                                                        </button>
+                                                    <?php else: ?>
+                                                        <span class="text-gray-500">(No actions)</span>
+                                                    <?php endif; ?>
+
                                                 <?php else: ?>
                                                     <span class="text-gray-500">(Your account)</span>
                                                 <?php endif ?>
@@ -435,13 +364,21 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
             sidebar.classList.toggle('z-40');
         }
 
-        function confirmDelete(id) {
-            if (confirm(`Are you sure you want to delete this user (ID: ${id})? This action cannot be undone.`)) {
+        function confirmDelete(id, name, role) {
+            <?php if ($_SESSION['user_role'] === 'admin'): ?>
+                if (role === 'owner') {
+                    showToast('Admin cannot delete an Owner account.', 'error');
+                    return false;
+                }
+            <?php endif; ?>
+
+            if (confirm(`Are you sure you want to delete user "${name}" (ID: ${id})? This action cannot be undone.`)) {
                 window.location.href = `user.php?delete=${id}`;
             }
         }
 
         const toastContainer = document.getElementById('toastContainer');
+
         function showToast(message, type) {
             const toast = document.createElement('div');
             toast.className = 'toast ' + type;
@@ -459,6 +396,50 @@ $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
         <?php if ($error_message): ?>
             showToast('<?= $error_message ?>', 'error');
         <?php endif; ?>
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const roleSelect = document.getElementById('role');
+            const currentUserRole = '<?= $_SESSION['user_role'] ?>';
+            const editingUserId = '<?= $editUser['id'] ?? '' ?>';
+            const loggedInUserId = '<?= $_SESSION['user_id'] ?>';
+
+            const usernameDisplay = document.getElementById('username_display');
+            if (usernameDisplay) {
+                usernameDisplay.setAttribute('readonly', true);
+                usernameDisplay.classList.add('bg-gray-100', 'cursor-not-allowed');
+            }
+            
+            if (roleSelect && currentUserRole === 'admin') {
+                const ownerOption = roleSelect.querySelector('option[value="owner"]');
+                if (ownerOption) {
+                    ownerOption.remove();
+                }
+
+                if (editingUserId && editingUserId === loggedInUserId) {
+                    roleSelect.setAttribute('disabled', true);
+                    roleSelect.classList.add('bg-gray-100', 'cursor-not-allowed');
+                } else if (editingUserId) {
+                    const originalRoleOfEditedUser = '<?= $editUser['role'] ?? '' ?>';
+                    Array.from(roleSelect.options).forEach(option => {
+                        if (option.value === 'owner' || option.value === 'admin') {
+                            option.remove();
+                        }
+                    });
+                    if (originalRoleOfEditedUser === 'staff') {
+                         roleSelect.value = 'staff';
+                    } else if (originalRoleOfEditedUser === 'admin') {
+                         roleSelect.setAttribute('disabled', true);
+                         roleSelect.classList.add('bg-gray-100', 'cursor-not-allowed');
+                         roleSelect.value = 'admin';
+                    }
+                }
+            } else if (roleSelect && currentUserRole === 'owner') {
+                if (editingUserId && editingUserId === loggedInUserId) {
+                    roleSelect.setAttribute('disabled', true);
+                    roleSelect.classList.add('bg-gray-100', 'cursor-not-allowed');
+                }
+            }
+        });
     </script>
 </body>
 

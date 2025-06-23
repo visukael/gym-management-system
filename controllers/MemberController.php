@@ -13,8 +13,12 @@ class MemberController {
     }
 
     public function handleAddMember($formData, $userId) {
-        if (empty($formData['full_name']) || empty($formData['phone']) || empty($formData['address']) || empty($formData['package_id_main'])) {
+        if (empty($formData['member_code']) || empty($formData['full_name']) || empty($formData['phone']) || empty($formData['address']) || empty($formData['package_id_main'])) {
             return ['success' => false, 'message' => "Please fill all required fields for adding a member."];
+        }
+
+        if ($this->memberModel->isMemberCodeExists($formData['member_code'])) {
+            return ['success' => false, 'message' => 'Member Code already exists. Please choose a different one.'];
         }
 
         $allPackages = $this->memberModel->getMembershipPackages();
@@ -26,7 +30,7 @@ class MemberController {
             $this->transactionModel->create([
                 'transaction_type' => 'member_new',
                 'label' => 'income',
-                'description' => "New member registration: " . $memberCreationResult['member_name'] . " (Package: " . $memberCreationResult['package_name'] . ")",
+                'description' => $memberCreationResult['member_code'] . " - " . $memberCreationResult['member_name'] . " (Package: " . $memberCreationResult['package_name'] . ")",
                 'amount' => $memberCreationResult['base_price'],
                 'discount' => $memberCreationResult['discount'],
                 'final_amount' => $memberCreationResult['final_price'],
@@ -42,11 +46,38 @@ class MemberController {
     }
 
     public function handleUpdateMember($memberId, $formData) {
-        if (empty($formData['full_name']) || empty($formData['phone']) || empty($formData['address']) || empty($formData['package_id_main'])) {
+        if (empty($formData['member_code']) || empty($formData['full_name']) || empty($formData['phone']) || empty($formData['address']) || empty($formData['package_id_main'])) {
             return ['success' => false, 'message' => "Please fill all required fields for updating a member."];
         }
 
-        $result = $this->memberModel->updateMember($memberId, $formData);
+        if ($this->memberModel->isMemberCodeExistsForOtherMember($formData['member_code'], $memberId)) {
+            return ['success' => false, 'message' => 'Member Code already exists for another member. Please choose a different one.'];
+        }
+
+        $userRole = $_SESSION['user_role'] ?? null;
+
+        $updateData = [
+            'member_code' => $formData['member_code'],
+            'full_name' => $formData['full_name'],
+            'phone' => $formData['phone'],
+            'address' => $formData['address'],
+            'email' => $formData['email'] ?? null,
+            'age' => $formData['age'] ?? null,
+            'package_id_main' => (int)$formData['package_id_main'],
+            'promo_id_main' => !empty($formData['promo_id_main']) ? (int)$formData['promo_id_main'] : null,
+        ];
+
+        if ($userRole === 'owner') {
+            if (isset($formData['join_date_modal'])) {
+                $updateData['join_date'] = $formData['join_date_modal'];
+            }
+            if (isset($formData['expired_date_modal'])) {
+                $updateData['expired_date'] = $formData['expired_date_modal'];
+            }
+        } else {
+        }
+
+        $result = $this->memberModel->updateMember($memberId, $updateData);
 
         if ($result) {
             return ['success' => true, 'message' => "Member updated successfully!"];
@@ -73,7 +104,7 @@ class MemberController {
             $this->transactionModel->create([
                 'transaction_type' => 'member_extend',
                 'label' => 'income',
-                'description' => "Membership extension for: " . $extensionResult['member_name'] . " (Package: " . $extensionResult['package_name'] . ")",
+                'description' => $extensionResult['member_code'] . " - " . $extensionResult['member_name'] . " (Package: " . $extensionResult['package_name'] . ")",
                 'amount' => $extensionResult['base_price'],
                 'discount' => $extensionResult['discount'],
                 'final_amount' => $extensionResult['final_price'],
@@ -105,7 +136,15 @@ class MemberController {
 
         $searchTerm = $getParams['search'] ?? '';
         $filterStatus = $getParams['status'] ?? '';
-        $members = $this->memberModel->getFilteredMembers($searchTerm, $filterStatus);
+        $orderBy = $getParams['order_by'] ?? 'member_code_asc';
+        $limit = 50;
+        $page = isset($getParams['page']) ? (int)$getParams['page'] : 1;
+        $offset = ($page - 1) * $limit;
+
+        $members = $this->memberModel->getFilteredMembers($searchTerm, $filterStatus, $orderBy, $limit, $offset);
+        $totalMembers = $this->memberModel->getTotalFilteredMembers($searchTerm, $filterStatus);
+        $totalPages = ceil($totalMembers / $limit);
+
 
         $editData = null;
         if (isset($getParams['edit'])) {
@@ -118,7 +157,27 @@ class MemberController {
             'promos' => $promos,
             'editData' => $editData,
             'searchTerm' => $searchTerm,
-            'filterStatus' => $filterStatus
+            'filterStatus' => $filterStatus,
+            'orderBy' => $orderBy,
+            'currentPage' => $page,
+            'totalPages' => $totalPages,
+            'totalMembers' => $totalMembers
         ];
+    }
+
+    public function getSmallestAvailableMemberCode() {
+        try {
+            $existingCodes = $this->memberModel->getAllMemberCodes();
+            $i = 1;
+            while (true) {
+                if (!in_array((string)$i, $existingCodes)) {
+                    return (string)$i;
+                }
+                $i++;
+            }
+        } catch (Exception $e) {
+            error_log("Error getting smallest available member code: " . $e->getMessage());
+            return null;
+        }
     }
 }

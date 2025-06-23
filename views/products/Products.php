@@ -1,234 +1,71 @@
 <?php
 session_start();
 require_once '../../config/database.php';
-require_once '../../models/Product.php';
-require_once '../../models/Transaction.php';
+require_once '../../controllers/ProductController.php';
 
 if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin'])) {
     header('Location: ../../login.php');
     exit;
 }
 
-$productModel = new Product($conn);
-$trxModel = new Transaction($conn);
+$productController = new ProductController($conn);
+$user_id = $_SESSION['user_id'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action_type = $_POST['action_type'] ?? '';
-    $user_id = $_SESSION['user_id'];
+    $response = ['success' => false, 'message' => 'Invalid action.'];
 
     if ($action_type === 'submit_product') {
-        $id = $_POST['id'] ?? '';
-        $name = htmlspecialchars(trim($_POST['name']));
-        $description = htmlspecialchars(trim($_POST['description']));
-        $price = (float)$_POST['price'];
-        $stock = (int)$_POST['stock'];
-        $initial_buy_price = (float)($_POST['initial_buy_price'] ?? 0);
-
-        if (empty($name) || $price < 0 || $stock < 0) {
-            $_SESSION['error_message'] = "Product name, price, and stock are required and cannot be negative.";
-            header("Location: products.php");
-            exit;
-        }
-
-        if ($id) {
-            $stmt = $conn->prepare("UPDATE products SET name=?, description=?, price=?, stock=? WHERE id=?");
-            $stmt->bind_param("ssdii", $name, $description, $price, $stock, $id);
-            if ($stmt->execute()) {
-                $_SESSION['success_message'] = "Product updated successfully!";
-            } else {
-                $_SESSION['error_message'] = "Error updating product: " . $conn->error;
-            }
-        } else {
-            $stmt = $conn->prepare("INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)");
-            $stmt->bind_param("ssdi", $name, $description, $price, $stock);
-            if ($stmt->execute()) {
-                $newProductId = $conn->insert_id;
-
-                if ($stock > 0 && $initial_buy_price > 0) {
-                    $trxModel->create([
-                        'transaction_type' => 'stock_add',
-                        'label' => 'outcome',
-                        'description' => "Initial stock purchase: {$name} x{$stock}",
-                        'amount' => $initial_buy_price,
-                        'discount' => 0,
-                        'final_amount' => $initial_buy_price,
-                        'member_id' => null,
-                        'product_id' => $newProductId,
-                        'user_id' => $user_id,
-                        'payment_method' => 'cash'
-                    ]);
-
-                    $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
-                    $stmtHist->bind_param("iid", $newProductId, $stock, $initial_buy_price);
-                    $stmtHist->execute();
-                }
-                $_SESSION['success_message'] = "Product added successfully!";
-            } else {
-                $_SESSION['error_message'] = "Error adding product: " . $conn->error;
-            }
-        }
+        $response = $productController->handleProductSubmit($_POST, $user_id);
     } elseif ($action_type === 'submit_stock') {
-        $product_id = (int)($_POST['product_id'] ?? 0);
-        $qty = (int)($_POST['qty'] ?? 0);
-        $buy_total = (float)($_POST['buy_price'] ?? 0);
-
-        if ($product_id <= 0 || $qty <= 0 || $buy_total < 0) {
-            $_SESSION['error_message'] = "Invalid product or quantity/buy price for adding stock.";
-            header("Location: products.php");
-            exit;
-        }
-
-        $product = $productModel->getById($product_id);
-        if (!$product) {
-            $_SESSION['error_message'] = "Product not found for stock addition.";
-            header("Location: products.php");
-            exit;
-        }
-
-        if ($productModel->addStock($product_id, $qty)) {
-            $stmtHist = $conn->prepare("INSERT INTO product_stock_entries (product_id, quantity, buy_price) VALUES (?, ?, ?)");
-            $stmtHist->bind_param("iid", $product_id, $qty, $buy_total);
-            $stmtHist->execute();
-
-            if ($buy_total > 0) {
-                $trxModel->create([
-                    'transaction_type' => 'stock_add',
-                    'label' => 'outcome',
-                    'description' => "Stock added: {$product['name']} x{$qty}",
-                    'amount' => $buy_total,
-                    'discount' => 0,
-                    'final_amount' => $buy_total,
-                    'member_id' => null,
-                    'product_id' => $product_id,
-                    'user_id' => $user_id,
-                    'payment_method' => 'cash'
-                ]);
-            }
-            $_SESSION['success_message'] = "Stock for " . htmlspecialchars($product['name']) . " added successfully!";
-        } else {
-            $_SESSION['error_message'] = "Failed to add stock.";
-        }
+        $response = $productController->handleAddStock($_POST, $user_id);
     } elseif ($action_type === 'submit_sale') {
-        $selected_products_ids = $_POST['selected_products'] ?? [];
-        $quantities_from_form = $_POST['qty'] ?? [];
-        $payment_method_sale = htmlspecialchars(trim($_POST['payment_method_sale'] ?? 'cash'));
-        $total_sale_amount = 0;
-        $products_sold_details = [];
+        $response = $productController->handleProcessSale($_POST, $user_id);
+    }
 
-        foreach ($selected_products_ids as $product_id_str) {
-            $product_id = (int)$product_id_str;
-            $qty_sold = isset($quantities_from_form[$product_id]) ? (int)$quantities_from_form[$product_id] : 0;
-
-            if ($product_id <= 0 || $qty_sold <= 0) continue;
-
-            $product = $productModel->getById($product_id);
-
-            if ($product && $product['stock'] >= $qty_sold) {
-                $subTotal = $product['price'] * $qty_sold;
-                $total_sale_amount += $subTotal;
-                $productModel->removeStock($product_id, $qty_sold);
-                $products_sold_details[] = htmlspecialchars($product['name']) . " x" . $qty_sold;
-            } else {
-                $_SESSION['error_message'] = "Not enough stock for " . htmlspecialchars($product['name']) . " or product not found.";
-                header("Location: products.php");
-                exit;
-            }
-        }
-
-        if ($total_sale_amount > 0) {
-            $desc = "Sale: " . implode(', ', $products_sold_details);
-            $trxModel->create([
-                'transaction_type' => 'product_sale',
-                'label' => 'income',
-                'description' => $desc,
-                'amount' => $total_sale_amount,
-                'discount' => 0,
-                'final_amount' => $total_sale_amount,
-                'member_id' => null,
-                'product_id' => null,
-                'user_id' => $user_id,
-                'payment_method' => $payment_method_sale
-            ]);
-            $_SESSION['success_message'] = "Product sale successfully processed!";
-        } else {
-            $_SESSION['error_message'] = "No products selected or quantities are invalid for sale.";
-        }
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
+    } else {
+        $_SESSION['error_message'] = $response['message'];
     }
     header("Location: products.php");
     exit;
 }
 
 if (isset($_GET['delete'])) {
-    $id = (int)$_GET['delete'];
-    if ($productModel->deleteProduct($id)) {
-        $_SESSION['success_message'] = "Product deleted successfully!";
+    $response = $productController->handleDeleteProduct((int)$_GET['delete']);
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
     } else {
-        $_SESSION['error_message'] = "Error deleting product. It might be referenced in transactions or stock entries.";
+        $_SESSION['error_message'] = $response['message'];
     }
     header("Location: products.php");
     exit;
 }
 
 if (isset($_GET['missing'])) {
-    $id = (int)$_GET['missing'];
-    $product = $productModel->getById($id);
-    if ($product && $product['stock'] > 0) {
-        if ($productModel->removeStock($id, 1)) {
-            $trxModel->create([
-                'transaction_type' => 'missing_item',
-                'label' => 'outcome',
-                'description' => "Missing product: {$product['name']} (1 unit)",
-                'amount' => $product['price'],
-                'discount' => 0,
-                'final_amount' => $product['price'],
-                'member_id' => null,
-                'product_id' => $id,
-                'user_id' => $_SESSION['user_id'],
-                'payment_method' => 'cash'
-            ]);
-            $_SESSION['success_message'] = htmlspecialchars($product['name']) . " marked as missing.";
-        } else {
-            $_SESSION['error_message'] = "Failed to mark product as missing.";
-        }
+    $response = $productController->handleMissingProduct((int)$_GET['missing'], $user_id);
+    if ($response['success']) {
+        $_SESSION['success_message'] = $response['message'];
     } else {
-        $_SESSION['error_message'] = "Product not found or no stock to mark as missing.";
+        $_SESSION['error_message'] = $response['message'];
     }
     header("Location: products.php");
     exit;
 }
 
-$editData = null;
-if (isset($_GET['edit'])) {
-    $id = (int)$_GET['edit'];
-    $editData = $productModel->getById($id);
-    if ($editData) {
-        echo "<script>document.addEventListener('DOMContentLoaded', () => openProductModal('edit', " . json_encode($editData) . "));</script>";
-    } else {
-        $_SESSION['error_message'] = "Product not found for editing.";
-        header("Location: products.php");
-        exit;
-    }
-}
+$viewData = $productController->getProductViewData($_GET);
 
-$addStockData = null;
-if (isset($_GET['add_stock'])) {
-    $id = (int)$_GET['add_stock'];
-    $addStockData = $productModel->getById($id);
-    if ($addStockData) {
-        echo "<script>document.addEventListener('DOMContentLoaded', () => openAddStockModal(" . json_encode($addStockData) . "));</script>";
-    } else {
-        $_SESSION['error_message'] = "Product not found for adding stock.";
-        header("Location: products.php");
-        exit;
-    }
-}
+$userRoleForAccess = $_SESSION['user_role'] ?? '';
+$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
+$userRoleDisplay = htmlspecialchars(ucfirst($userRoleForAccess));
 
-$searchTerm = $_GET['search'] ?? '';
-$filterStock = $_GET['stock_status'] ?? '';
-
-$products = $productModel->getFilteredProducts($searchTerm, $filterStock);
-
-$stockLog = $productModel->getRecentStockHistory(10);
+$products = $viewData['products'];
+$stockLog = $viewData['stockLog'];
+$searchTerm = $viewData['searchTerm'];
+$filterStock = $viewData['filterStock'];
+$editData = $viewData['editData'];
+$addStockData = $viewData['addStockData'];
 
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
 $userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
@@ -263,35 +100,39 @@ unset($_SESSION['error_message']);
                 </div>
                 <div class="flex flex-col flex-grow px-4 py-4 overflow-y-auto">
                     <nav class="flex-1 space-y-2">
-                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'dashboard.php') ? 'active' : '' ?>">
                             <i data-lucide="layout-dashboard" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Dashboard
                         </a>
-                        <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'members.php') ? 'active' : '' ?>">
                             <i data-lucide="users" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Members
                         </a>
-                        <a href="products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item active">
+                        <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'products.php') ? 'active' : '' ?>">
                             <i data-lucide="shopping-bag" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Products
                         </a>
-                        <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'transactions.php') ? 'active' : '' ?>">
                             <i data-lucide="credit-card" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Transactions
                         </a>
-                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'attendance.php') ? 'active' : '' ?>">
                             <i data-lucide="calendar-check" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Attendance
                         </a>
-                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'promotions.php') ? 'active' : '' ?>">
                             <i data-lucide="percent" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Promotions
                         </a>
-                        <a href="../users/user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Manage Users
-                        </a>
-                        <a href="../../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+
+                        <?php if ($userRoleForAccess === 'owner'): ?>
+                            <a href="user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'user.php') ? 'active' : '' ?>">
+                                <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                                Manage Users
+                            </a>
+                        <?php endif; ?>
+
+                        <a href="../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
                             <i data-lucide="log-out" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Logout
                         </a>
@@ -303,7 +144,7 @@ unset($_SESSION['error_message']);
                             </div>
                             <div class="ml-3">
                                 <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
-                                <p class="text-xs text-gray-500"><?= $userRole ?></p>
+                                <p class="text-xs text-gray-500"><?= $userRoleDisplay ?></p>
                             </div>
                         </a>
                     </div>
@@ -383,7 +224,6 @@ unset($_SESSION['error_message']);
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sale Price</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Avg. Buy Price</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
                                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
@@ -398,9 +238,6 @@ unset($_SESSION['error_message']);
                                                 <?= htmlspecialchars($row['description']) ?>
                                             </td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">Rp<?= number_format($row['price'], 0, ',', '.') ?></td>
-                                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                                <?= $row['avg_buy_price'] ? 'Rp' . number_format($row['avg_buy_price'], 0, ',', '.') : '-' ?>
-                                            </td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
                                                 <span class="status-badge
                                                     <?php
@@ -429,55 +266,21 @@ unset($_SESSION['error_message']);
                                     <?php endforeach; ?>
                                 <?php else: ?>
                                     <tr>
-                                        <td colspan="7" class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 text-center">No products found matching your criteria.</td>
+                                        <td colspan="6" class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 text-center">No products found matching your criteria.</td>
                                     </tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
-                </div>
 
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mt-6">
-                    <div class="flex items-center justify-between mb-4">
-                        <h2 class="text-lg font-medium text-gray-800">Product Sale</h2>
+                    <div class="mt-6">
+                        <h2 class="text-lg font-medium text-gray-800 mb-4">Product Sale</h2>
                         <button onclick="openSaleModal()" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
                             <i data-lucide="shopping-cart" class="w-4 h-4 mr-2"></i> Process Sale
                         </button>
-                    </div>
-                    <div class="text-sm text-gray-500">
-                        Click "Process Sale" to select multiple products and quantities for a single transaction.
-                    </div>
-                </div>
-
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mt-6">
-                    <h2 class="text-lg font-medium text-gray-800 mb-4">Recent Stock History</h2>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Buy Price</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <?php if (count($stockLog) > 0): ?>
-                                    <?php foreach ($stockLog as $entry): ?>
-                                    <tr class="table-row-hover">
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($entry['product_name']) ?></td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= $entry['quantity'] ?></td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">Rp<?= number_format($entry['buy_price'], 0, ',', '.') ?></td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= date('d M Y H:i', strtotime($entry['created_at'])) ?></td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <tr>
-                                        <td colspan="4" class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 text-center">No recent stock entries found.</td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
+                        <div class="text-sm text-gray-500 mt-2">
+                            Click "Process Sale" to select multiple products and quantities for a single transaction.
+                        </div>
                     </div>
                 </div>
 
@@ -523,7 +326,7 @@ unset($_SESSION['error_message']);
                             class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
                     </div>
                 </div>
-                
+
                 <div class="flex items-center space-x-3 mt-6">
                     <button type="submit" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
                         <i data-lucide="save" class="w-4 h-4 mr-2"></i> Save Product
@@ -556,7 +359,7 @@ unset($_SESSION['error_message']);
                     <input type="number" name="buy_price" id="add_stock_buy_price" required min="0" step="100"
                         class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
                 </div>
-                
+
                 <div class="flex items-center space-x-3 mt-6">
                     <button type="submit" class="btn-primary inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
                         <i data-lucide="plus-circle" class="w-4 h-4 mr-2"></i> Add Stock
@@ -588,23 +391,23 @@ unset($_SESSION['error_message']);
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
                             <?php foreach ($products as $row): ?>
-                            <tr class="table-row-hover">
-                                <td class="px-4 py-3 whitespace-nowrap text-sm">
-                                    <input type="checkbox" name="selected_products[]" value="<?= $row['id'] ?>" data-max-stock="<?= $row['stock'] ?>"
+                                <tr class="table-row-hover">
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm">
+                                        <input type="checkbox" name="selected_products[]" value="<?= $row['id'] ?>" data-max-stock="<?= $row['stock'] ?>"
                                             onchange="toggleSaleQtyInput(this, <?= $row['id'] ?>)" <?= $row['stock'] <= 0 ? 'disabled' : '' ?>>
-                                </td>
-                                <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($row['name']) ?></td>
-                                <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">Rp<?= number_format($row['price'], 0, ',', '.') ?></td>
-                                <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                    <span class="status-badge <?= $row['stock'] <= 0 ? 'status-out' : ($row['stock'] <= 5 ? 'status-low' : 'status-in') ?>">
-                                        <?= $row['stock'] ?>
-                                    </span>
-                                </td>
-                                <td class="px-4 py-3 whitespace-nowrap text-sm">
-                                    <input type="number" name="qty[<?= $row['id'] ?>]" min="1" max="<?= $row['stock'] ?>" value="1"
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($row['name']) ?></td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">Rp<?= number_format($row['price'], 0, ',', '.') ?></td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                        <span class="status-badge <?= $row['stock'] <= 0 ? 'status-out' : ($row['stock'] <= 5 ? 'status-low' : 'status-in') ?>">
+                                            <?= $row['stock'] ?>
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm">
+                                        <input type="number" name="qty[<?= $row['id'] ?>]" min="1" max="<?= $row['stock'] ?>" value="1"
                                             class="form-input-field w-20 px-2 py-1 text-sm" disabled>
-                                </td>
-                            </tr>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
                             <?php if (empty($products)): ?>
                                 <tr>
@@ -614,7 +417,7 @@ unset($_SESSION['error_message']);
                         </tbody>
                     </table>
                 </div>
-                
+
                 <div class="mt-4">
                     <label for="payment_method_sale" class="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
                     <select name="payment_method_sale" id="payment_method_sale" required
@@ -692,7 +495,7 @@ unset($_SESSION['error_message']);
             if (mode === 'add') {
                 productModalTitle.textContent = 'Add New Product';
                 initialStockFields.style.display = 'block';
-                
+
                 productNameModal.setAttribute('required', '');
                 productPriceModal.setAttribute('required', '');
                 productStockModal.setAttribute('required', '');
@@ -724,7 +527,7 @@ unset($_SESSION['error_message']);
             addStockForm.reset();
             addStockProductId.value = productData.id;
             addStockProductName.textContent = productData.name;
-            
+
             addStockQtyInput.setAttribute('required', '');
             addStockBuyPriceInput.setAttribute('required', '');
 
@@ -732,6 +535,7 @@ unset($_SESSION['error_message']);
         }
 
         const saleForm = document.getElementById('saleForm');
+
         function openSaleModal() {
             saleForm.reset();
             saleForm.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
@@ -770,6 +574,7 @@ unset($_SESSION['error_message']);
         }
 
         const toastContainer = document.getElementById('toastContainer');
+
         function showToast(message, type) {
             const toast = document.createElement('div');
             toast.className = 'toast ' + type;

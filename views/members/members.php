@@ -3,7 +3,6 @@ session_start();
 require_once '../../config/database.php';
 require_once '../../controllers/MemberController.php';
 
-// Redirect unauthorized users
 if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner', 'admin'])) {
     header('Location: ../../login.php');
     exit;
@@ -11,6 +10,13 @@ if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner'
 
 $memberController = new MemberController($conn);
 $user_id = $_SESSION['user_id'];
+$userRole = $_SESSION['user_role'] ?? 'admin';
+
+if (isset($_GET['get_smallest_member_code'])) {
+    $code = $memberController->getSmallestAvailableMemberCode();
+    echo json_encode(['member_code' => $code]);
+    exit;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action_type = $_POST['action_type'] ?? '';
@@ -49,15 +55,22 @@ if (isset($_GET['delete'])) {
 
 $viewData = $memberController->getMemberViewData($_GET);
 
+$userRoleForAccess = $_SESSION['user_role'] ?? ''; // Tambahkan atau pastikan variabel ini ada
+$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
+$userRoleDisplay = htmlspecialchars(ucfirst($userRoleForAccess));
+
 $members = $viewData['members'];
 $packages = $viewData['packages'];
 $promos = $viewData['promos'];
 $editData = $viewData['editData'];
 $searchTerm = $viewData['searchTerm'];
 $filterStatus = $viewData['filterStatus'];
+$orderBy = $viewData['orderBy'];
+$currentPage = $viewData['currentPage'];
+$totalPages = $viewData['totalPages'];
+$totalMembers = $viewData['totalMembers'];
 
 $userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
-$userRole = htmlspecialchars(ucfirst($_SESSION['user_role'] ?? '-'));
 
 $success_message = $_SESSION['success_message'] ?? '';
 $error_message = $_SESSION['error_message'] ?? '';
@@ -89,35 +102,39 @@ unset($_SESSION['error_message']);
                 </div>
                 <div class="flex flex-col flex-grow px-4 py-4 overflow-y-auto">
                     <nav class="flex-1 space-y-2">
-                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'dashboard.php') ? 'active' : '' ?>">
                             <i data-lucide="layout-dashboard" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Dashboard
                         </a>
-                        <a href="members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item active">
+                        <a href="../members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'members.php') ? 'active' : '' ?>">
                             <i data-lucide="users" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Members
                         </a>
-                        <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'products.php') ? 'active' : '' ?>">
                             <i data-lucide="shopping-bag" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Products
                         </a>
-                        <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'transactions.php') ? 'active' : '' ?>">
                             <i data-lucide="credit-card" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Transactions
                         </a>
-                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'attendance.php') ? 'active' : '' ?>">
                             <i data-lucide="calendar-check" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Attendance
                         </a>
-                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="../promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'promotions.php') ? 'active' : '' ?>">
                             <i data-lucide="percent" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Promotions
                         </a>
-                        <a href="../users/user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Manage Users
-                        </a>
-                        <a href="../../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+
+                        <?php if ($userRoleForAccess === 'owner'): ?>
+                            <a href="user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'user.php') ? 'active' : '' ?>">
+                                <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                                Manage Users
+                            </a>
+                        <?php endif; ?>
+
+                        <a href="../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
                             <i data-lucide="log-out" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Logout
                         </a>
@@ -129,7 +146,7 @@ unset($_SESSION['error_message']);
                             </div>
                             <div class="ml-3">
                                 <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
-                                <p class="text-xs text-gray-500"><?= $userRole ?></p>
+                                <p class="text-xs text-gray-500"><?= $userRoleDisplay ?></p>
                             </div>
                         </a>
                     </div>
@@ -167,7 +184,7 @@ unset($_SESSION['error_message']);
                                 <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                     <i data-lucide="search" class="w-5 h-5 text-gray-400"></i>
                                 </div>
-                                <input type="text" name="search" placeholder="Search by name, phone, or email..." value="<?= htmlspecialchars($searchTerm) ?>"
+                                <input type="text" name="search" placeholder="Search by name or member code..." value="<?= htmlspecialchars($searchTerm) ?>"
                                     class="form-input-field pl-10 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
                             </div>
                             <div class="w-full sm:w-auto">
@@ -179,6 +196,13 @@ unset($_SESSION['error_message']);
                                     <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
                                 </select>
                             </div>
+                            <div class="w-full sm:w-auto">
+                                <select name="order_by"
+                                    class="form-select-field block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                                    <option value="member_code_asc" <?= $orderBy === 'member_code_asc' ? 'selected' : '' ?>>Member Code (Asc)</option>
+                                    <option value="member_code_desc" <?= $orderBy === 'member_code_desc' ? 'selected' : '' ?>>Member Code (Desc)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <div class="flex flex-col sm:flex-row gap-4 w-full lg:w-auto justify-end">
@@ -186,7 +210,7 @@ unset($_SESSION['error_message']);
                                 <i data-lucide="filter" class="w-4 h-4 mr-2"></i>
                                 Apply Filters
                             </button>
-                            <?php if (!empty($searchTerm) || !empty($filterStatus)): ?>
+                            <?php if (!empty($searchTerm) || !empty($filterStatus) || $orderBy !== 'member_code_asc'): ?>
                                 <a href="members.php" class="btn-secondary inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 w-full sm:w-auto">
                                     <i data-lucide="x-circle" class="w-4 h-4 mr-2"></i> Clear Filters
                                 </a>
@@ -205,7 +229,7 @@ unset($_SESSION['error_message']);
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Member Code</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone</th>
                                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
@@ -220,7 +244,7 @@ unset($_SESSION['error_message']);
                                 <?php if (count($members) > 0): ?>
                                     <?php foreach ($members as $row): ?>
                                         <tr class="table-row-hover" id="member-<?= $row['id'] ?>">
-                                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= $row['id'] ?></td>
+                                            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($row['member_code']) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($row['full_name']) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($row['phone']) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($row['email'] ?? '-') ?></td>
@@ -229,11 +253,15 @@ unset($_SESSION['error_message']);
                                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= date('d M Y', strtotime($row['expired_date'])) ?></td>
                                             <td class="px-4 py-3 whitespace-nowrap text-sm">
                                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
-                                                     <?php
-                                                     if ($row['status'] === 'active') echo 'status-active';
-                                                     else if ($row['status'] === 'inactive') echo 'status-inactive';
-                                                     else echo 'status-pending';
-                                                     ?>">
+                                                    <?php
+                                                    if ($row['status'] === 'active') {
+                                                        echo 'bg-green-100 text-green-800';
+                                                    } else if ($row['status'] === 'inactive') {
+                                                        echo 'bg-red-100 text-red-800';
+                                                    } else {
+                                                        echo 'bg-yellow-100 text-yellow-800';
+                                                    }
+                                                    ?>">
                                                     <?= ucfirst($row['status']) ?>
                                                 </span>
                                             </td>
@@ -255,6 +283,36 @@ unset($_SESSION['error_message']);
                             </tbody>
                         </table>
                     </div>
+
+                    <div class="flex justify-between items-center mt-6">
+                        <span class="text-sm text-gray-700">
+                            Showing <?= count($members) ?> of <?= $totalMembers ?> members
+                        </span>
+                        <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                            <?php if ($currentPage > 1): ?>
+                                <a href="?<?= http_build_query(array_merge($_GET, ['page' => $currentPage - 1])) ?>"
+                                    class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                                    <span class="sr-only">Previous</span>
+                                    <i data-lucide="chevron-left" class="h-5 w-5"></i>
+                                </a>
+                            <?php endif; ?>
+
+                            <?php for ($i = 1; $i <= $totalPages; $i++): ?>
+                                <a href="?<?= http_build_query(array_merge($_GET, ['page' => $i])) ?>"
+                                    class="<?= $i === $currentPage ? 'z-10 bg-red-50 border-red-500 text-red-600' : 'bg-white border-gray-300 text-gray-700' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium hover:bg-gray-50">
+                                    <?= $i ?>
+                                </a>
+                            <?php endfor; ?>
+
+                            <?php if ($currentPage < $totalPages): ?>
+                                <a href="?<?= http_build_query(array_merge($_GET, ['page' => $currentPage + 1])) ?>"
+                                    class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                                    <span class="sr-only">Next</span>
+                                    <i data-lucide="chevron-right" class="h-5 w-5"></i>
+                                </a>
+                            <?php endif; ?>
+                        </nav>
+                    </div>
                 </div>
             </div>
         </div>
@@ -270,6 +328,11 @@ unset($_SESSION['error_message']);
                 <input type="hidden" name="member_id_extend" id="memberIdExtend">
 
                 <div id="addEditFields">
+                    <div>
+                        <label for="member_code_modal" class="block text-sm font-medium text-gray-700 mb-1">Member Code</label>
+                        <input type="text" name="member_code" id="member_code_modal"
+                            class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                    </div>
                     <div>
                         <label for="full_name_modal" class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
                         <input type="text" name="full_name" id="full_name_modal"
@@ -325,7 +388,7 @@ unset($_SESSION['error_message']);
                             <?php endforeach; ?>
                         </select>
                     </div>
-                     <div>
+                    <div>
                         <label for="payment_method_new_member" class="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
                         <select name="payment_method_new_member" id="payment_method_new_member" required
                             class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
@@ -333,6 +396,20 @@ unset($_SESSION['error_message']);
                             <option value="qr">QR</option>
                         </select>
                     </div>
+
+                    <div id="owner_date_fields" class="<?= ($_SESSION['user_role'] === 'owner') ? '' : 'hidden' ?>">
+                        <div>
+                            <label for="join_date_modal" class="block text-sm font-medium text-gray-700 mb-1">Join Date</label>
+                            <input type="date" name="join_date_modal" id="join_date_modal"
+                                class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                        </div>
+                        <div>
+                            <label for="expired_date_modal" class="block text-sm font-medium text-gray-700 mb-1">Expired Date</label>
+                            <input type="date" name="expired_date_modal" id="expired_date_modal"
+                                class="form-input-field mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                        </div>
+                    </div>
+
                 </div>
 
                 <div id="extendFields" class="hidden">
@@ -349,7 +426,7 @@ unset($_SESSION['error_message']);
                             <?php endforeach; ?>
                         </select>
                     </div>
-                     <div>
+                    <div>
                         <label for="promo_id_extend" class="block text-sm font-medium text-gray-700 mb-1">Promotion (Optional)</label>
                         <select name="promo_id_extend" id="promo_id_extend"
                             class="form-select-field mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
@@ -410,6 +487,7 @@ unset($_SESSION['error_message']);
         const extendFields = document.getElementById('extendFields');
         const currentExpiredDateSpan = document.getElementById('currentExpiredDate');
 
+        const member_code_modal = document.getElementById('member_code_modal');
         const full_name_modal = document.getElementById('full_name_modal');
         const phone_modal = document.getElementById('phone_modal');
         const address_modal = document.getElementById('address_modal');
@@ -418,6 +496,10 @@ unset($_SESSION['error_message']);
         const package_id_main_modal = document.getElementById('package_id_main_modal');
         const promo_id_main_modal = document.getElementById('promo_id_main_modal');
         const payment_method_new_member = document.getElementById('payment_method_new_member');
+
+        const join_date_modal = document.getElementById('join_date_modal');
+        const expired_date_modal = document.getElementById('expired_date_modal');
+        const ownerDateFields = document.getElementById('owner_date_fields');
 
         const package_id_extend = document.getElementById('package_id_extend');
         const promo_id_extend = document.getElementById('promo_id_extend');
@@ -435,6 +517,10 @@ unset($_SESSION['error_message']);
             addEditFields.classList.add('hidden');
             extendFields.classList.add('hidden');
 
+            ownerDateFields.classList.add('hidden');
+            join_date_modal.removeAttribute('required');
+            expired_date_modal.removeAttribute('required');
+
             if (mode === 'add') {
                 modalTitle.textContent = 'Add New Member';
                 actionType.value = 'add_edit';
@@ -442,11 +528,26 @@ unset($_SESSION['error_message']);
 
                 addEditFields.classList.remove('hidden');
 
+                member_code_modal.setAttribute('required', '');
                 full_name_modal.setAttribute('required', '');
                 phone_modal.setAttribute('required', '');
                 address_modal.setAttribute('required', '');
                 package_id_main_modal.setAttribute('required', '');
                 payment_method_new_member.setAttribute('required', '');
+
+                fetch('members.php?get_smallest_member_code=true')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.member_code) {
+                            member_code_modal.value = data.member_code;
+                        } else {
+                            member_code_modal.value = '';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching smallest member code:', error);
+                        member_code_modal.value = '';
+                    });
 
             } else if (mode === 'edit' && memberData) {
                 modalTitle.textContent = 'Edit Member';
@@ -456,11 +557,13 @@ unset($_SESSION['error_message']);
 
                 addEditFields.classList.remove('hidden');
 
+                member_code_modal.setAttribute('required', '');
                 full_name_modal.setAttribute('required', '');
                 phone_modal.setAttribute('required', '');
                 address_modal.setAttribute('required', '');
                 package_id_main_modal.setAttribute('required', '');
 
+                member_code_modal.value = memberData.member_code;
                 full_name_modal.value = memberData.full_name;
                 phone_modal.value = memberData.phone;
                 address_modal.value = memberData.address;
@@ -468,6 +571,12 @@ unset($_SESSION['error_message']);
                 age_modal.value = memberData.age;
                 package_id_main_modal.value = memberData.package_id;
                 promo_id_main_modal.value = memberData.promo_id || '';
+
+                if ('<?= $userRole ?>' === 'owner') {
+                    ownerDateFields.classList.remove('hidden');
+                    join_date_modal.value = memberData.join_date;
+                    expired_date_modal.value = memberData.expired_date;
+                }
 
             } else if (mode === 'extend' && memberData) {
                 modalTitle.textContent = 'Extend Membership for ' + memberData.full_name;
@@ -480,7 +589,11 @@ unset($_SESSION['error_message']);
                 package_id_extend.setAttribute('required', '');
                 payment_method_extend.setAttribute('required', '');
 
-                currentExpiredDateSpan.textContent = new Date(memberData.expired_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+                currentExpiredDateSpan.textContent = new Date(memberData.expired_date).toLocaleDateString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric'
+                });
 
                 package_id_extend.value = memberData.package_id;
                 promo_id_extend.value = memberData.promo_id || '';

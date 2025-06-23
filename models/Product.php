@@ -26,7 +26,7 @@ class Product {
             $stmt->close();
             return $last_id;
         } else {
-            error_log("Product model execute failed (createProduct): " . $this->conn->error);
+            error_log("Product model execute failed (createProduct): " . $stmt->error);
             $stmt->close();
             return false;
         }
@@ -132,10 +132,7 @@ class Product {
     }
 
     public function getFilteredProducts($searchTerm = '', $filterStock = '') {
-        $sql = "SELECT p.*,
-                    (SELECT AVG(buy_price / quantity)
-                     FROM " . $this->stock_entries_table . "
-                     WHERE product_id = p.id AND quantity > 0) as avg_buy_price
+        $sql = "SELECT p.*
                 FROM " . $this->table_name . " p
                 WHERE 1=1";
 

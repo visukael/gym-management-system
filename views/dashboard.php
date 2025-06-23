@@ -7,6 +7,10 @@ if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['owner'
     exit;
 }
 
+$userRoleForAccess = $_SESSION['user_role'] ?? '';
+$userName = htmlspecialchars($_SESSION['user_name'] ?? 'Unknown');
+$userRoleDisplay = htmlspecialchars(ucfirst($userRoleForAccess));
+
 $conn = $conn;
 
 $incomeQuery = $conn->query("SELECT SUM(final_amount) AS total_income FROM transactions WHERE label = 'income'");
@@ -48,10 +52,10 @@ $initialMonthlyIncomeLabels = [];
 for ($i = 5; $i >= 0; $i--) {
     $month = date('Y-m', strtotime("-$i months"));
     $monthLabel = date('M Y', strtotime("-$i months"));
-    
+
     $incomeMonthQuery = $conn->query("SELECT SUM(final_amount) AS monthly_income FROM transactions WHERE label = 'income' AND DATE_FORMAT(created_at, '%Y-%m') = '$month'");
     $monthlyIncome = $incomeMonthQuery->fetch_assoc()['monthly_income'] ?? 0;
-    
+
     $initialMonthlyIncomeData[] = (int)$monthlyIncome;
     $initialMonthlyIncomeLabels[] = $monthLabel;
 }
@@ -123,7 +127,7 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
             border-color: #ef4444;
             box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
         }
-        
+
         .chart-placeholder {
             background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
             background-size: 400% 100%;
@@ -153,51 +157,53 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
                 </div>
                 <div class="flex flex-col flex-grow px-4 py-4 overflow-y-auto">
                     <nav class="flex-1 space-y-2">
-                        <a href="dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item active">
+                        <a href="dashboard.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'dashboard.php') ? 'active' : '' ?>">
                             <i data-lucide="layout-dashboard" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Dashboard
                         </a>
-                        <a href="../views/members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="members/members.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'members.php') ? 'active' : '' ?>">
                             <i data-lucide="users" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Members
                         </a>
-                        <a href="../views/products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="products/products.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'products.php') ? 'active' : '' ?>">
                             <i data-lucide="shopping-bag" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Products
                         </a>
-                        <a href="../views/transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="transactions/transactions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'transactions.php') ? 'active' : '' ?>">
                             <i data-lucide="credit-card" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Transactions
                         </a>
-                        <a href="../views/attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="attendance/attendance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'attendance.php') ? 'active' : '' ?>">
                             <i data-lucide="calendar-check" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Attendance
                         </a>
-                        <a href="../views/promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+                        <a href="promotions/promotions.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'promotions.php') ? 'active' : '' ?>">
                             <i data-lucide="percent" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Promotions
                         </a>
-                        <a href="../views/users/user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
-                            <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
-                            Manage Users
-                        </a>
-                        <a href="../logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
+
+                        <?php if ($userRoleForAccess === 'owner'): ?>
+                            <a href="user.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item <?= (basename($_SERVER['PHP_SELF']) == 'user.php') ? 'active' : '' ?>">
+                                <i data-lucide="settings" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
+                                Manage Users
+                            </a>
+                        <?php endif; ?>
+
+                        <a href="logout.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-lg sidebar-item">
                             <i data-lucide="log-out" class="w-5 h-5 mr-3 sidebar-icon text-gray-500"></i>
                             Logout
                         </a>
                     </nav>
                     <div class="mt-auto">
-                        <div class="p-4 mt-4 bg-gray-50 rounded-lg">
-                            <div class="flex items-center">
-                                <div class="flex-shrink-0">
-                                    <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
-                                </div>
-                                <div class="ml-3">
-                                    <p class="text-sm font-medium"><?= $userName ?></p>
-                                    <p class="text-xs text-gray-500"><?= $userRole ?></p>
-                                </div>
+                        <a href="../settings/setting.php" class="flex items-center p-4 mt-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+                            <div class="flex-shrink-0">
+                                <img class="w-10 h-10 rounded-full" src="https://ui-avatars.com/api/?name=<?= urlencode($userName) ?>&background=ef4444&color=fff" alt="Profile">
                             </div>
-                        </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-gray-900"><?= $userName ?></p>
+                                <p class="text-xs text-gray-500"><?= $userRoleDisplay ?></p>
+                            </div>
+                        </a>
                     </div>
                 </div>
             </div>
@@ -437,7 +443,10 @@ while ($row = $transactionTypesQuery->fetch_assoc()) {
                 return data;
             } catch (error) {
                 console.error('Error fetching chart data:', error);
-                return { labels: [], data: [] };
+                return {
+                    labels: [],
+                    data: []
+                };
             }
         }
 
